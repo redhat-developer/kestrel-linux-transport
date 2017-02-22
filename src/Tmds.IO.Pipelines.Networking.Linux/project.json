@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0-*",
+  "buildOptions": {
+    "debugType": "portable"
+  },
+  "packOptions": {
+    "files": {
+      "mappings": {
+        "lib/netstandard1.6/Tmds.IO.Pipelines.Networking.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.IO.Pipelines.Networking.Linux.Native.so"
+      }
+    }
+  },
+  "dependencies": {},
+  "frameworks": {
+    "netstandard1.6": {
+      "dependencies": {
+        "NETStandard.Library": "1.6.1"
+      }
+    }
+  },
+  "scripts": {
+    "precompile": "../build-native.sh"
+  }
+}
