@@ -4,7 +4,7 @@
     "debugType": "portable",
     "copyToOutput": {
         "mappings": {
-          "Tmds.IO.Pipelines.Networking.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.IO.Pipelines.Networking.Linux.Native.so"
+          "Tmds.Kestrel.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.Kestrel.Linux.Native.so"
         }
     }
   },
@@ -12,7 +12,7 @@
     "System.Runtime.Serialization.Primitives": "4.3.0",
     "xunit": "2.2.0-beta4-build3444",
     "dotnet-test-xunit": "2.2.0-preview2-build1029",
-    "Tmds.IO.Pipelines.Networking.Linux": "1.0.0-*"
+    "Tmds.Kestrel.Linux": "1.0.0-*"
   },
   "testRunner": "xunit",
   "frameworks": {

@@ -6,7 +6,7 @@
   "packOptions": {
     "files": {
       "mappings": {
-        "lib/netstandard1.6/Tmds.IO.Pipelines.Networking.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.IO.Pipelines.Networking.Linux.Native.so"
+        "lib/netstandard1.6/Tmds.Kestrel.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.Kestrel.Linux.Native.so"
       }
     }
   },

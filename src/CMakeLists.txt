@@ -226,4 +226,4 @@ endfunction()
 
 include(configure.cmake)
 
-add_subdirectory(Tmds.IO.Pipelines.Networking.Linux.Native)
+add_subdirectory(Tmds.Kestrel.Linux.Native)
