@@ -15,8 +15,10 @@ script:
   - dotnet pack src/Tmds.Kestrel.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER" --output .
 
 after_success:
+  - echo "$TRAVIS_BRANCH $TRAVIS_PULL_REQUEST"
   - "if [ \"$TRAVIS_BRANCH\" == \"master\" ] && [ \"$TRAVIS_PULL_REQUEST\" == \"false\" ]; then curl -H \"X-NuGet-ApiKey: $NUGET_APIKEY\" -T Tmds.Kestrel.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg https://www.myget.org/F/tmds/api/v2/package ; fi"
 
 env:
   global:
     secure: Y1kPitMcm+EPTkKb6KJLsfpqW2MAYKuye/J41Fg9H9INfh8cK5cLwSNj2hVnawHANZE4ahiGIYqZS02btb/G6At07Hszv9AisZHDwoUJcRR8whPUqxhFwIJZd2Z/rFfWvllDKg0Q5D4mb0Er/rlWmpC1oKWT3nFYKZANkmZr7qBtLyj0VFJNWKNx8oajEWgAYlnA9oNajQj3dqYtgON5RG6EFJ2HYypaS4kgBGM7sltnN2B21cgFV67JT5eCrETp9VjYt78A9bYKbqyPOWlr+b4IFENcUiY1DTGj1X7mipkphf43b5K14Y/Gr4slM/mu44yIllWSTJwjY2s+TJfzJApwNFPynhn6asVGQ7qGo7/UkWikK1eI3jJvx8n8Q9uKcji0+iWV+M8I+dQQBqAfaP/Sf1iB4NDORRlfKFakFG2eKaLDEHXFu8cik6ybL9tLdHZHHrPfr5uHu4XAEMOCaqQ2Nf86eAV0+UtpVjlNHa8b53DzYMx7MCDkmzsgrSjlHWbqWCHzcEVobTS8zngeSXVUKC5RC2zypQocnsor77ZpDbWCM+orRpH1Afcrm3r0X7nlgCfHSoK1yMVaLfVPFnEe1TR4z58MpSu4HZPpiFs+/Eb/nNs9VWELiK6bgOwZIkaUz3VwCMgkn2xmRgVQJi7TEs9uucw/m2EyhiBPUws=
+
