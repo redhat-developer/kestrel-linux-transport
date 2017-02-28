@@ -1,24 +1,23 @@
 language: c
-
 sudo: required
 dist: trusty
-
 before_install:
-  - sudo sh -c 'echo "deb [arch=amd64] https://apt-mo.trafficmanager.net/repos/dotnet/ trusty main" > /etc/apt/sources.list.d/dotnetdev.list'
-  - sudo apt-key adv --keyserver apt-mo.trafficmanager.net --recv-keys 417A0893
-  - sudo apt-get update
-  - sudo apt-get install dotnet-dev-1.0.0-preview2-003156
-
+- sudo sh -c 'echo "deb [arch=amd64] https://apt-mo.trafficmanager.net/repos/dotnet/
+  trusty main" > /etc/apt/sources.list.d/dotnetdev.list'
+- sudo apt-key adv --keyserver apt-mo.trafficmanager.net --recv-keys 417A0893
+- sudo apt-get update
+- sudo apt-get install dotnet-dev-1.0.0-preview2-003156
 script:
-  - dotnet restore
-  - pushd test/Tmds.Kestrel.Linux.Test && dotnet test && popd
-  - dotnet pack src/Tmds.Kestrel.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER" --output .
-
+- dotnet restore
+- pushd test/Tmds.Kestrel.Linux.Test && dotnet test && popd
+- dotnet pack src/Tmds.Kestrel.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER"
+  --output .
 after_success:
-  - echo "$TRAVIS_BRANCH $TRAVIS_PULL_REQUEST"
-  - "if [ \"$TRAVIS_BRANCH\" == \"master\" ] && [ \"$TRAVIS_PULL_REQUEST\" == \"false\" ]; then curl -H \"X-NuGet-ApiKey: $NUGET_APIKEY\" -T Tmds.Kestrel.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg https://www.myget.org/F/tmds/api/v2/package ; fi"
+- echo "$TRAVIS_BRANCH $TRAVIS_PULL_REQUEST"
+- 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
+  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T Tmds.Kestrel.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg
+  https://www.myget.org/F/tmds/api/v2/package ; fi'
 
 env:
   global:
-    secure: Y1kPitMcm+EPTkKb6KJLsfpqW2MAYKuye/J41Fg9H9INfh8cK5cLwSNj2hVnawHANZE4ahiGIYqZS02btb/G6At07Hszv9AisZHDwoUJcRR8whPUqxhFwIJZd2Z/rFfWvllDKg0Q5D4mb0Er/rlWmpC1oKWT3nFYKZANkmZr7qBtLyj0VFJNWKNx8oajEWgAYlnA9oNajQj3dqYtgON5RG6EFJ2HYypaS4kgBGM7sltnN2B21cgFV67JT5eCrETp9VjYt78A9bYKbqyPOWlr+b4IFENcUiY1DTGj1X7mipkphf43b5K14Y/Gr4slM/mu44yIllWSTJwjY2s+TJfzJApwNFPynhn6asVGQ7qGo7/UkWikK1eI3jJvx8n8Q9uKcji0+iWV+M8I+dQQBqAfaP/Sf1iB4NDORRlfKFakFG2eKaLDEHXFu8cik6ybL9tLdHZHHrPfr5uHu4XAEMOCaqQ2Nf86eAV0+UtpVjlNHa8b53DzYMx7MCDkmzsgrSjlHWbqWCHzcEVobTS8zngeSXVUKC5RC2zypQocnsor77ZpDbWCM+orRpH1Afcrm3r0X7nlgCfHSoK1yMVaLfVPFnEe1TR4z58MpSu4HZPpiFs+/Eb/nNs9VWELiK6bgOwZIkaUz3VwCMgkn2xmRgVQJi7TEs9uucw/m2EyhiBPUws=
-
+    secure: n9MHrC/DKw6MrTOBPWnvCbu5JxUGocci1LBTPXV4FNAn5JMh7CEEWCX1Nml/x7qfJVoe9tz+aD55IxKY//eTMUQet9Npimc7XXr6Dcjlqc9flE4zXd8WC2d3ch3VU1C+Dxv9nN1pT7n6oWgN8eOk4LALnFmjSsS+jiUruRn+GI7qUnbaHFx11Seoh6lN9qAhsLb57/U+e5HjYqAQyXwiMBdbLkcHPP/DYOLxoD//4WtYpNagzg82ba/CwqB03cAyvyTxjdfedLjbz6sgFXfkf3cr0d1qvav0ZYnyUn7gZ25cvRHFdMUDW9MD0EbF5UUFkyVGy7ugHu8vzScH7zirEBHbR4QIK0Y4sXH6O731fCRG9UzsBLMdTEtlvjljx/8N/vDnMBhWFdHy+yFqqNoR677hWho+zo+oY4oQ0gDab5hN2TKZRM2VT5OhHDUB0Vei30ukxpvGq7P958fDlTO8qq8NqjghWm0us0DqOz8u+P8A6RWW5YBgfQ3BpUX6KfVzeM8j2j9s5AuCiqJ09BfHiqswzqChQuE4wDEfhk2GXdfiHklqr+4tRIBhwXwDmXIPPJcylzc8fGBGXKYZMBEC4oeKK9OGMT5TNv9qBByUTRgW11v6YGH8DDZWn6UqiXeOTE49LqIqaeIk4zUmkQ5FdECc5p4SEkV6VCBQ+rBevkM=
