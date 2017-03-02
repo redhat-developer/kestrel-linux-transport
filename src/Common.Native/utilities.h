@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <errno.h>
+#include <stdint.h> // int32_t, int64_t, etc.
 #include <assert.h>
 #include <type_traits>
-#include "pal_types.h"
+#include <errno.h>
 
 /**
 * Cast a positive value typed as a signed integer to the
@@ -37,6 +37,17 @@ inline static int ToFileDescriptor(intptr_t fd)
 }
 
 /**
+* Converts a file descriptor to an intptr_t.
+* intptr_t is the type used to marshal file descriptors so we can use SafeHandles effectively.
+*/
+inline static intptr_t FromFileDescriptor(int fd)
+{
+    assert(0 <= fd && fd < sysconf(_SC_OPEN_MAX));
+
+    return static_cast<intptr_t>(fd);
+}
+
+/**
 * Checks if the IO operation was interupted and needs to be retried.
 * Returns true if the operation was interupted; otherwise, false.
 */
@@ -44,4 +55,10 @@ template <typename TInt>
 static inline bool CheckInterrupted(TInt result)
 {
     return result < 0 && errno == EINTR;
+}
+
+enum PosixResult : int32_t {};
+static inline PosixResult ToPosixResult(int ret)
+{
+    return ret < 0 ? static_cast<PosixResult>(-errno) : static_cast<PosixResult>(ret);
 }

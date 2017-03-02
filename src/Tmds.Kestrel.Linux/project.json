@@ -1,7 +1,8 @@
 {
   "version": "0.1.0-*",
   "buildOptions": {
-    "debugType": "portable"
+    "debugType": "portable",
+    "allowUnsafe": true
   },
   "packOptions": {
     "files": {
@@ -12,9 +13,12 @@
   },
   "dependencies": {},
   "frameworks": {
-    "netstandard1.6": {
+    "netcoreapp1.0": {
       "dependencies": {
-        "NETStandard.Library": "1.6.1"
+        "NETStandard.Library": "1.6.1",
+        "System.Threading.Thread": "4.3.0",
+        "Tmds.Posix": "0.1.0-master-linux-*",
+        "System.IO.Pipelines": "0.1.0-*"
       }
     }
   },

@@ -1,7 +1,7 @@
 project(Tmds.Kestrel.Linux.Native)
 
 set(SOURCES
-    lib.cpp
+    pipeend.cpp
 )
 
 add_library(Tmds.Kestrel.Linux.Native
