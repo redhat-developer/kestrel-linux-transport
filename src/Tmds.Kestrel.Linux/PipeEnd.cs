@@ -17,12 +17,12 @@ namespace Tmds.Kestrel.Linux
     static class PipeInterop
     {
         [DllImport(Interop.Library, EntryPoint="TmdsKL_Pipe")]
-        public extern static PosixResult Pipe(out PipeEnd end1, out PipeEnd end2);
+        public extern static PosixResult Pipe(out PipeEnd readEnd, out PipeEnd writeEnd);
     }
 
     class PipeEnd : CloseSafeHandle
     {
-        public PipeEnd()
+        private PipeEnd()
         {}
 
         public new PosixResult Write(ArraySegment<byte> buffer)

@@ -2,6 +2,7 @@ project(Tmds.Kestrel.Linux.Native)
 
 set(SOURCES
     pipeend.cpp
+    epoll.cpp
 )
 
 add_library(Tmds.Kestrel.Linux.Native

@@ -1,7 +1,6 @@
 using System;
 using Tmds.Kestrel.Linux;
 using Tmds.Posix;
-using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Tests

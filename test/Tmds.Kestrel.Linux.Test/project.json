@@ -2,6 +2,7 @@
   "version": "1.0.0-*",
   "buildOptions": {
     "debugType": "portable",
+    "allowUnsafe": true,
     "copyToOutput": {
         "mappings": {
           "Tmds.Kestrel.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.Kestrel.Linux.Native.so"
