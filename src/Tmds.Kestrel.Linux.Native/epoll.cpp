@@ -24,18 +24,22 @@ int32_t TmdsKL_SizeOfEPollEvent()
 
 PosixResult TmdsKL_EPollCreate(intptr_t* fd)
 {
-    int rv = epoll_create1(EPOLL_CLOEXEC);
-    if (rv != -1)
+    if (fd == nullptr)
     {
-        *fd = FromFileDescriptor(rv);
+        return PosixResultEFAULT;
     }
+
+    int rv = epoll_create1(EPOLL_CLOEXEC);
+    *fd = FromFileDescriptor(rv);
+
     return ToPosixResult(rv);
 }
 
 PosixResult TmdsKL_EPollWait(intptr_t epoll, struct epoll_event* events, int32_t maxEvents, int32_t timeout)
 {
     int fd = ToFileDescriptor(epoll);
-    int rv = epoll_wait(fd, events, maxEvents, timeout);
+    int rv;
+    while (CheckInterrupted(rv = epoll_wait(fd, events, maxEvents, timeout)));
     return ToPosixResult(rv);
 }
 

@@ -59,12 +59,24 @@ namespace Tmds.Kestrel.Linux
             return epoll;
         }
 
-        public unsafe PosixResult Wait(void* events, int maxEvents, int timeout)
+        public unsafe void Wait(void* events, int maxEvents, int timeout)
+        {
+            TryWait(events, maxEvents, timeout)
+                .ThrowOnError();
+        }
+
+        public unsafe PosixResult TryWait(void* events, int maxEvents, int timeout)
         {
             return EPollInterop.EPollWait(this, events, maxEvents, timeout);
         }
 
-        public PosixResult Control(EPollOperation operation, SafeHandle fd, EPollEvents events, EPollData data)
+        public void Control(EPollOperation operation, SafeHandle fd, EPollEvents events, EPollData data)
+        {
+            TryControl(operation, fd, events, data)
+                .ThrowOnError();
+        }
+
+        public PosixResult TryControl(EPollOperation operation, SafeHandle fd, EPollEvents events, EPollData data)
         {
             return EPollInterop.EPollControl(this, operation, fd, events, data.Long);
         }

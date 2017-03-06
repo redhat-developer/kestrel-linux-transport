@@ -17,7 +17,7 @@ namespace Tmds.Kestrel.Linux
     static class PipeInterop
     {
         [DllImport(Interop.Library, EntryPoint="TmdsKL_Pipe")]
-        public extern static PosixResult Pipe(out PipeEnd readEnd, out PipeEnd writeEnd);
+        public extern static PosixResult Pipe(out PipeEnd readEnd, out PipeEnd writeEnd, bool blocking);
     }
 
     class PipeEnd : CloseSafeHandle
@@ -25,21 +25,35 @@ namespace Tmds.Kestrel.Linux
         private PipeEnd()
         {}
 
-        public new PosixResult Write(ArraySegment<byte> buffer)
+        public int Write(ArraySegment<byte> buffer)
         {
-            return base.Write(buffer);
+            var result = TryWrite(buffer);
+            result.ThrowOnError();
+            return result.Value;
         }
 
-        public new PosixResult Read(ArraySegment<byte> buffer)
+        public new PosixResult TryWrite(ArraySegment<byte> buffer)
         {
-            return base.Read(buffer);
+            return base.TryWrite(buffer);
         }
 
-        public static PipeEndPair CreatePair()
+        public int Read(ArraySegment<byte> buffer)
+        {
+            var result = TryRead(buffer);
+            result.ThrowOnError();
+            return result.Value;
+        }
+
+        public new PosixResult TryRead(ArraySegment<byte> buffer)
+        {
+            return base.TryRead(buffer);
+        }
+
+        public static PipeEndPair CreatePair(bool blocking)
         {
             PipeEnd readEnd;
             PipeEnd writeEnd;
-            var result = PipeInterop.Pipe(out readEnd, out writeEnd);
+            var result = PipeInterop.Pipe(out readEnd, out writeEnd, blocking);
             result.ThrowOnError();
             return new PipeEndPair { ReadEnd = readEnd, WriteEnd = writeEnd };
         }

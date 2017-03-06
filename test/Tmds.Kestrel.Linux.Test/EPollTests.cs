@@ -35,7 +35,7 @@ namespace Tests
         public void Readable()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
@@ -44,7 +44,7 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for readable
-            result = epoll.Control(EPollOperation.Add, pipePair1.ReadEnd, EPollEvents.Readable, new EPollData() { Long = 0x0102030405060708L });
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.ReadEnd, EPollEvents.Readable, new EPollData() { Long = 0x0102030405060708L });
             Assert.True(result.IsSuccess);
 
             // Not readable
@@ -52,7 +52,7 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Make readable
-            pipePair1.WriteEnd.Write(s_data);
+            pipePair1.WriteEnd.TryWrite(s_data);
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(1, events.Length);
             Assert.Equal(EPollEvents.Readable, events[0].Events);
@@ -66,7 +66,7 @@ namespace Tests
         public void Writable()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
@@ -75,7 +75,7 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for writable
-            result = epoll.Control(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0102030405060708L });
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0102030405060708L });
             Assert.True(result.IsSuccess);
 
             // Writable
@@ -92,8 +92,8 @@ namespace Tests
         public void MultipleEvents()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
-            var pipePair2 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
+            var pipePair2 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
@@ -102,11 +102,11 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for writable
-            result = epoll.Control(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0102030405060708L });
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0102030405060708L });
             Assert.True(result.IsSuccess);
 
             // Add pipePair2
-            result = epoll.Control(EPollOperation.Add, pipePair2.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0807060504030201L });
+            result = epoll.TryControl(EPollOperation.Add, pipePair2.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0807060504030201L });
             Assert.True(result.IsSuccess);
 
             // Poll
@@ -128,8 +128,8 @@ namespace Tests
         public void MaxEvents()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
-            var pipePair2 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
+            var pipePair2 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
@@ -138,11 +138,11 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for writable
-            result = epoll.Control(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
             Assert.True(result.IsSuccess);
 
             // Add pipePair2
-            result = epoll.Control(EPollOperation.Add, pipePair2.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPollOperation.Add, pipePair2.WriteEnd, EPollEvents.Writable, new EPollData());
             Assert.True(result.IsSuccess);
 
             // Poll with maxEvents 1
@@ -158,13 +158,13 @@ namespace Tests
         public void OneShotAndModify()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
 
             // Register pipePair1 for readable with OneShot
-            result = epoll.Control(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable | EPollEvents.OneShot, new EPollData());
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable | EPollEvents.OneShot, new EPollData());
             Assert.True(result.IsSuccess);
 
             // Poll indicates writable
@@ -176,7 +176,7 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Rearm without OneShot
-            result = epoll.Control(EPollOperation.Modify, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPollOperation.Modify, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
 
             // Poll indicates writable
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
@@ -194,13 +194,13 @@ namespace Tests
         public void Delete()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
 
             // Register pipePair1 for writable
-            result = epoll.Control(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
             Assert.True(result.IsSuccess);
 
             // Poll indicates writable
@@ -208,7 +208,7 @@ namespace Tests
             Assert.Equal(1, events.Length);
 
             // Unregister
-            result = epoll.Control(EPollOperation.Delete, pipePair1.WriteEnd, EPollEvents.None, new EPollData());
+            result = epoll.TryControl(EPollOperation.Delete, pipePair1.WriteEnd, EPollEvents.None, new EPollData());
 
             // Flush pending
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
@@ -240,7 +240,7 @@ namespace Tests
         public void HangUp()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
@@ -249,7 +249,7 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for readable
-            result = epoll.Control(EPollOperation.Add, pipePair1.ReadEnd, EPollEvents.Readable, new EPollData());
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.ReadEnd, EPollEvents.Readable, new EPollData());
             Assert.True(result.IsSuccess);
 
             // Close the write end
@@ -268,7 +268,7 @@ namespace Tests
         public void Error()
         {
             var epoll = EPoll.Create();
-            var pipePair1 = PipeEnd.CreatePair();
+            var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
             EPollEvent[] events;
             PosixResult result;
@@ -280,7 +280,7 @@ namespace Tests
             pipePair1.ReadEnd.Dispose();
 
             // Register pipePair1 for readable
-            result = epoll.Control(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
             Assert.True(result.IsSuccess);
 
             // Poll returns Writable, Error
@@ -292,12 +292,12 @@ namespace Tests
             pipePair1.WriteEnd.Dispose();
         }
 
-        private static unsafe EPollEvent[] PollEvents(EPoll epoll, int maxEvents, int timeout)
+        internal static unsafe EPollEvent[] PollEvents(EPoll epoll, int maxEvents, int timeout)
         {
             bool isPackedEvents = EPoll.PackedEvents;
             EPollEvent* events = stackalloc EPollEvent[isPackedEvents ? 0 : maxEvents];
             EPollEventPacked* packedEvents = stackalloc EPollEventPacked[isPackedEvents ? maxEvents : 0];
-            var result = epoll.Wait(events != null ? (void*)events : (void*)packedEvents, maxEvents, timeout);
+            var result = epoll.TryWait(events != null ? (void*)events : (void*)packedEvents, maxEvents, timeout);
             if (result.IsSuccess)
             {
                 int nrEvents = result.Value;
