@@ -1,7 +1,3 @@
-// Copyright 2017 Tom Deseyn <tom.deseyn@gmail.com>
-// This software is made available under the MIT License
-// See LICENSE for details
-
 using System;
 using System.Net;
 using System.Threading.Tasks;
@@ -163,7 +159,7 @@ namespace Tests
         public void Shutdown()
         {
             Socket socket1, socket2;
-            CreateConnectedSockets(out socket1, out socket2, blocking: false, ipv4: false);
+            CreateConnectedSockets(out socket1, out socket2, blocking: false);
 
             var result = socket1.TryShutdown(SocketShutdown.Receive);
             Assert.True(result.IsSuccess);
