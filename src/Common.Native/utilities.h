@@ -62,3 +62,11 @@ static inline PosixResult ToPosixResult(int ret)
 {
     return ret < 0 ? static_cast<PosixResult>(-errno) : static_cast<PosixResult>(ret);
 }
+
+static inline PosixResult PosixResultForErrno(int nativeErrno)
+{
+    return static_cast<PosixResult>(-nativeErrno);
+}
+
+const static PosixResult PosixResultEFAULT = static_cast<PosixResult>(-EFAULT);
+const static PosixResult PosixResultSUCCESS = static_cast<PosixResult>(0);
