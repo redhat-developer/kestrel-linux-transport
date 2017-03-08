@@ -4,6 +4,7 @@
 
 #include "utilities.h"
 
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/ip.h>
@@ -18,6 +19,28 @@ struct PalSocketAddress
     int16_t Family;
 };
 
+// NOTE: the layout of this type is intended to exactly  match the layout of a `struct iovec`. There are
+//       assertions in pal_networking.cpp that validate this.
+struct IOVector
+{
+    uint8_t* Base;
+    uintptr_t Count;
+};
+
+// NOTE: clang has trouble with offsetof nested inside of static_assert. Instead, store
+//       the necessary field offsets in constants.
+const int OffsetOfIOVectorBase = offsetof(IOVector, Base);
+const int OffsetOfIOVectorCount = offsetof(IOVector, Count);
+const int OffsetOfIovecBase = offsetof(iovec, iov_base);
+const int OffsetOfIovecLen = offsetof(iovec, iov_len);
+
+// We require that IOVector have the same layout as iovec.
+static_assert(sizeof(IOVector) == sizeof(iovec), "");
+static_assert(sizeof(decltype(IOVector::Base)) == sizeof(decltype(iovec::iov_base)), "");
+static_assert(OffsetOfIOVectorBase == OffsetOfIovecBase, "");
+static_assert(sizeof(decltype(IOVector::Count)) == sizeof(decltype(iovec::iov_len)), "");
+static_assert(OffsetOfIOVectorCount == OffsetOfIovecLen, "");
+
 extern "C"
 {
     PosixResult TmdsKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* createdSocket);
@@ -27,8 +50,8 @@ extern "C"
     PosixResult TmdsKL_Listen(intptr_t socket, int backlog);
     PosixResult TmdsKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, intptr_t* acceptedSocket);
     PosixResult TmdsKL_Shutdown(intptr_t socket, int32_t socketShutdown);
-    PosixResult TmdsKL_Send(intptr_t handle, void* buf, int32_t count);
-    PosixResult TmdsKL_Receive(intptr_t handle, void* buf, int32_t count);
+    PosixResult TmdsKL_Send(intptr_t handle, IOVector* ioVectors, int ioVectorLen);
+    PosixResult TmdsKL_Receive(intptr_t handle, IOVector* ioVectors, int ioVectorLen);
     PosixResult TmdsKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
     PosixResult TmdsKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen);
     PosixResult TmdsKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
@@ -147,6 +170,10 @@ enum SocketOptionName : int32_t
     PAL_SO_RCVTIMEO = 0x1006,
     PAL_SO_ERROR = 0x1007,
     PAL_SO_TYPE = 0x1008,
+
+    // corefx controls this together with PAL_SO_REUSEADDR
+    PAL_SO_REUSEPORT = 0x2001,
+    
     // PAL_SO_MAXCONN = 0x7fffffff,
 
     // Names for level PAL_SOL_IP
@@ -397,6 +424,9 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionName, int32_t socketO
                     return true;
 
                 // case PAL_SO_MAXCONN:
+                case PAL_SO_REUSEPORT:
+                    optName = SO_REUSEPORT;
+                    return true;
 
                 default:
                     return false;
@@ -774,19 +804,57 @@ PosixResult TmdsKL_Shutdown(intptr_t socket, int32_t socketShutdown)
     return ToPosixResult(rv);
 }
 
-PosixResult TmdsKL_Send(intptr_t handle, void* buf, int32_t count)
+PosixResult TmdsKL_Send(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
 {
+    if (ioVectors == nullptr || ioVectorLen <= 0)
+    {
+        return PosixResultEFAULT;
+    }
+
+    // TODO: check we don't' send more than INT_MAX byte because we are returning an int
+
     int fd = ToFileDescriptor(handle);
+    msghdr header =
+    {
+        .msg_name = nullptr,
+        .msg_namelen = 0,
+        .msg_iov = reinterpret_cast<iovec*>(ioVectors),
+        .msg_iovlen = static_cast<size_t>(ioVectorLen),
+        .msg_control = nullptr,
+        .msg_controllen = 0,
+        .msg_flags = 0
+    };
+    int flags = MSG_NOSIGNAL;
+
     int rv;
-    while (CheckInterrupted(rv = static_cast<int>(write(fd, buf, UnsignedCast(count)))));
+    while (CheckInterrupted(rv = static_cast<int>(sendmsg(fd, &header, flags))));
     return ToPosixResult(rv);
 }
 
-PosixResult TmdsKL_Receive(intptr_t handle, void* buf, int32_t count)
+PosixResult TmdsKL_Receive(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
 {
+    if (ioVectors == nullptr || ioVectorLen <= 0)
+    {
+        return PosixResultEFAULT;
+    }
+
+    // TODO: check we don't' send more than INT_MAX byte because we are returning an int
+
     int fd = ToFileDescriptor(handle);
+    msghdr header =
+    {
+        .msg_name = nullptr,
+        .msg_namelen = 0,
+        .msg_iov = reinterpret_cast<iovec*>(ioVectors),
+        .msg_iovlen = static_cast<size_t>(ioVectorLen),
+        .msg_control = nullptr,
+        .msg_controllen = 0,
+        .msg_flags = 0
+    };
+    int flags = MSG_NOSIGNAL;
+
     int rv;
-    while (CheckInterrupted(rv = static_cast<int>(read(fd, buf, UnsignedCast(count)))));
+    while (CheckInterrupted(rv = static_cast<int>(recvmsg(fd, &header, flags))));
     return ToPosixResult(rv);
 }
 

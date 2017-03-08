@@ -9,6 +9,12 @@ using Tmds.Posix;
 
 namespace Tmds.Kestrel.Linux
 {
+    unsafe struct IOVector
+    {
+        public byte* Base;
+        public UIntPtr Count;
+    }
+
     static class SocketInterop
     {
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_Socket")]
@@ -33,17 +39,20 @@ namespace Tmds.Kestrel.Linux
         public static extern PosixResult Shutdown(Socket socket, SocketShutdown shutdown);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_Send")]
-        public static unsafe extern PosixResult Send(SafeHandle handle, byte* buf, int count);
+        public static extern unsafe PosixResult Send(Socket socket, IOVector* ioVectors, int ioVectorLen);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_Receive")]
-        public static unsafe extern PosixResult Receive(SafeHandle handle, byte* buf, int count);
+        public static unsafe extern PosixResult Receive(SafeHandle handle, IOVector* ioVectors, int ioVectorLen);
+
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_SetSockOpt")]
         public static extern unsafe PosixResult SetSockOpt(SafeHandle socket, SocketOptionLevel optionLevel, SocketOptionName optionName, byte* optionValue, int optionLen);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_GetSockOpt")]
         public static extern unsafe PosixResult GetSockOpt(SafeHandle socket, SocketOptionLevel optionLevel, SocketOptionName optionName, byte* optionValue, int* optionLen);
+
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_GetPeerName")]
         public static extern unsafe PosixResult GetPeerName(Socket socket, byte* addr, int addrlen);
+
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_GetSockName")]
         public static extern unsafe PosixResult GetSockName(Socket socket, byte* addr, int addrlen);
     }
@@ -130,10 +139,24 @@ namespace Tmds.Kestrel.Linux
 
         public unsafe PosixResult TryReceive(ArraySegment<byte> buffer)
         {
+            // TODO: check buffer
             fixed (byte* buf = buffer.Array)
             {
-                return SocketInterop.Receive(this, buf + buffer.Offset, buffer.Count);
+                IOVector ioVector = new IOVector() { Base = buf, Count = new UIntPtr((uint)buffer.Count) };
+                return SocketInterop.Receive(this, &ioVector, 1);
             }
+        }
+
+        public unsafe int Receive(IOVector* ioVectors, int ioVectorLen)
+        {
+            var result = TryReceive(ioVectors, ioVectorLen);
+            result.ThrowOnError();
+            return result.Value;
+        }
+
+        public unsafe PosixResult TryReceive(IOVector* ioVectors, int ioVectorLen)
+        {
+            return SocketInterop.Receive(this, ioVectors, ioVectorLen);
         }
 
         public void Shutdown(SocketShutdown shutdown)
@@ -156,10 +179,24 @@ namespace Tmds.Kestrel.Linux
 
         public unsafe PosixResult TrySend(ArraySegment<byte> buffer)
         {
+            // TODO: check buffer
             fixed (byte* buf = buffer.Array)
             {
-                return SocketInterop.Send(this, buf + buffer.Offset, buffer.Count);
+                IOVector ioVector = new IOVector() { Base = buf, Count = new UIntPtr((uint)buffer.Count) };
+                return SocketInterop.Send(this, &ioVector, 1);
             }
+        }
+
+        public unsafe int Send(IOVector* ioVectors, int ioVectorLen)
+        {
+            var result = TrySend(ioVectors, ioVectorLen);
+            result.ThrowOnError();
+            return result.Value;
+        }
+
+        public unsafe PosixResult TrySend(IOVector* ioVectors, int ioVectorLen)
+        {
+            return SocketInterop.Send(this, ioVectors, ioVectorLen);
         }
 
         public void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
@@ -173,6 +210,7 @@ namespace Tmds.Kestrel.Linux
             return SocketInterop.SetSockOpt(this, optionLevel, optionName, (byte*)&value, 4);
         }
 
+        // TODO: rename to GetSocketOptionInt
         public int GetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName)
         {
             int value = 0;

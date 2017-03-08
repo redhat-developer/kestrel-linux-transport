@@ -94,10 +94,10 @@ namespace Tmds.Kestrel.Linux
 
         // Specifies the total per-socket buffer space reserved for sends. This is
         // unrelated to the maximum message size or the size of a TCP window.
-        //SendBuffer = 0x1001,
+        SendBuffer = 0x1001,
 
         // Send low water mark.
-        //ReceiveBuffer = 0x1002,
+        ReceiveBuffer = 0x1002,
 
         // Specifies the total per-socket buffer space reserved for receives. This is unrelated to the maximum message size or the size of a TCP window.
         //SendLowWater = 0x1003,
@@ -122,6 +122,7 @@ namespace Tmds.Kestrel.Linux
 
         // Maximum queue length that can be specified by <see cref='System.Net.Sockets.Socket.Listen'/>.
         //MaxConnections = 0x7fffffff,
+        ReusePort = 0x2001,
         #endregion
 
         // The following values are taken from ws2tcpip.h,
