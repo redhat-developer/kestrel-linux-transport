@@ -1,7 +1,3 @@
-// Copyright 2017 Tom Deseyn <tom.deseyn@gmail.com>
-// This software is made available under the MIT License
-// See COPYING for details
-
 #include "utilities.h"
 
 #include <sys/epoll.h>
