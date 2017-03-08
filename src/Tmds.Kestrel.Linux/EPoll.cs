@@ -59,10 +59,11 @@ namespace Tmds.Kestrel.Linux
             return epoll;
         }
 
-        public unsafe void Wait(void* events, int maxEvents, int timeout)
+        public unsafe int Wait(void* events, int maxEvents, int timeout)
         {
-            TryWait(events, maxEvents, timeout)
-                .ThrowOnError();
+            var result = TryWait(events, maxEvents, timeout);
+            result.ThrowOnError();
+            return result.Value;
         }
 
         public unsafe PosixResult TryWait(void* events, int maxEvents, int timeout)
