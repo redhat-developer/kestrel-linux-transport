@@ -8,10 +8,16 @@ using Tmds.Posix;
 
 namespace Tmds.Kestrel.Linux
 {
-    struct PipeEndPair
+    struct PipeEndPair : IDisposable
     {
         public PipeEnd ReadEnd;
         public PipeEnd WriteEnd;
+
+        public void Dispose()
+        {
+            ReadEnd?.Dispose();
+            WriteEnd?.Dispose();
+        }
     }
 
     static class PipeInterop
@@ -24,6 +30,39 @@ namespace Tmds.Kestrel.Linux
     {
         private PipeEnd()
         {}
+
+        public void WriteByte(byte b)
+        {
+            TryWriteByte(b)
+                .ThrowOnError();
+        }
+
+        public unsafe PosixResult TryWriteByte(byte b)
+        {
+            return base.TryWrite(&b, 1);
+        }
+
+        public unsafe byte ReadByte()
+        {
+            byte b = 0;
+            var result = base.TryRead(&b, 1);
+            result.ThrowOnError();
+            return b;
+        }
+
+        public unsafe PosixResult TryReadByte()
+        {
+            byte b;
+            var result = base.TryRead(&b, 1);
+            if (result.IsSuccess)
+            {
+                return new PosixResult(b);
+            }
+            else
+            {
+                return result;
+            }
+        }
 
         public int Write(ArraySegment<byte> buffer)
         {
