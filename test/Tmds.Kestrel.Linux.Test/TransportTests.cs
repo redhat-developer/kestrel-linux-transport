@@ -84,5 +84,60 @@ namespace Tests
                 }
             }
         }
+
+        [Fact]
+        public async Task Writable()
+        {
+            const int bufferSize = 2048;
+            int bytesWritten = 0;
+            var waitingForWritable = new TaskCompletionSource<object>();
+            TestServer.ConnectionHandler connectionHandler = async (input, output) =>
+            {
+                Timer writeTimeout = new Timer(
+                    // timeout -> we are waiting for the socket to become writable
+                    o => waitingForWritable.SetResult(null),
+                    null, Timeout.Infinite, Timeout.Infinite
+                );
+
+                do
+                {
+                    var buffer = output.Alloc(bufferSize);
+                    buffer.Advance(bufferSize);
+                    bytesWritten += bufferSize;
+
+                    // If it takes 1 second to write, assume the socket
+                    // is no longer writable
+                    writeTimeout.Change(1000, Timeout.Infinite);
+                    await buffer.FlushAsync();
+                    // cancel the timeout
+                    writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
+
+                } while (!waitingForWritable.Task.IsCompleted);
+
+                writeTimeout.Dispose();
+                output.Complete();
+                input.Complete();
+            };
+
+            using (var testServer = new TestServer(connectionHandler))
+            {
+                await testServer.BindAsync();
+                using (var client = testServer.ConnectTo())
+                {
+                    // wait for the server to have sent so much data
+                    // so it waiting for us to read some
+                    await waitingForWritable.Task;
+
+                    // read all the data
+                    int receivedBytes = 0;
+                    byte[] receiveBuffer = new byte[bufferSize];
+                    while (receivedBytes < bytesWritten)
+                    {
+                        var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
+                        receivedBytes += received;
+                    }
+                }
+            }
+        }
     }
 }

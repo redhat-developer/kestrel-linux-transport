@@ -11,9 +11,20 @@ namespace Tmds.Kestrel.Linux
 {
     partial class TransportThread
     {
-        private const int ListenBacklog = 128;
+        private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
-        private static PipeOptions DefaultPipeOptions = new PipeOptions();
+        // Highest bit set in EPollData for writable poll
+        // the remaining bits of the EPollData are the key
+        // of the _sockets dictionary.
+        private const int DupKeyMask        = 1 << 31;
+        private static PipeOptions DefaultPipeOptions = new PipeOptions()
+        {
+            // Ensure FlushAsync waits for the reader to catch-up
+            // https://github.com/dotnet/corefxlab/issues/1316
+            // TODO: What values to use here...?
+            MaximumSizeHigh = 1,
+            MaximumSizeLow = 1
+        };
 
         enum State
         {
@@ -29,6 +40,7 @@ namespace Tmds.Kestrel.Linux
 
         private State _state;
         private readonly object _gate = new object();
+        // key is the file descriptor
         private ConcurrentDictionary<int, TSocket> _sockets;
         private List<TSocket> _acceptSockets;
         private EPoll _epoll;
@@ -255,16 +267,24 @@ namespace Tmds.Kestrel.Linux
                     if (notPacked)
                         ptr++;           // 3
                     TSocket tsocket;
-                    if (_sockets.TryGetValue(key, out tsocket))
+                    if (_sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
                     {
                         var type = tsocket.Flags & SocketFlags.TypeMask;
-                        if (type == SocketFlags.TypeAccept && !doCloseAccept)
+                        if (type == SocketFlags.TypeClient)
+                        {
+                            bool read = (key & DupKeyMask) == 0;
+                            if (read)
+                            {
+                                tsocket.CompleteReadable();
+                            }
+                            else
+                            {
+                                tsocket.CompleteWritable();
+                            }
+                        }
+                        else if (type == SocketFlags.TypeAccept && !doCloseAccept)
                         {
                             HandleAccept(tsocket);
-                        }
-                        else if (type == SocketFlags.TypeClient)
-                        {
-                            HandleClient(tsocket, (EPollEvents)events);
                         }
                         else // TypePipe
                         {
@@ -278,35 +298,6 @@ namespace Tmds.Kestrel.Linux
                 }
             }
             Stop();
-        }
-
-        private void HandleClient(TSocket tsocket, EPollEvents events)
-        {
-            if ((events & EPollEvents.Error) != 0)
-            {
-                events |= EPollEvents.Readable | EPollEvents.Writable;
-            }
-            lock (tsocket)
-            {
-                // Check what events were registered
-                events = events & (EPollEvents)(SocketFlags.EPollEventMask & tsocket.Flags);
-                // Clear those events
-                tsocket.Flags &= ~(SocketFlags)events;
-                // Re-arm
-                EPollEvents remaining = (EPollEvents)(tsocket.Flags & SocketFlags.EPollEventMask);
-                if (remaining != 0)
-                {
-                    _epoll.Control(EPollOperation.Modify, tsocket.Socket, remaining | EPollEvents.OneShot, new EPollData() { Int1 = tsocket.Key, Int2 = tsocket.Key });
-                }
-            }
-            if ((events & EPollEvents.Readable) != 0)
-            {
-                tsocket.CompleteReadable();
-            }
-            if ((events & EPollEvents.Writable) != 0)
-            {
-                tsocket.CompleteWritable();
-            }
         }
 
         private void HandleAccept(TSocket tacceptSocket)
@@ -473,7 +464,19 @@ namespace Tmds.Kestrel.Linux
         private WritableAwaitable Writable(TSocket tsocket)
         {
             tsocket.ResetWritableAwaitable();
-            RegisterForEvent(tsocket, EPollEvents.Writable);
+            bool registered = tsocket.DupSocket != null;
+            // To avoid having to synchronize the event mask with the Readable
+            // we dup the socket.
+            // In the EPollData we set the highest bit to indicate this is the
+            // poll for writable.
+            if (!registered)
+            {
+                tsocket.DupSocket = tsocket.Socket.Duplicate();
+            }
+            _epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
+                            tsocket.DupSocket,
+                            EPollEvents.Writable | EPollEvents.OneShot,
+                            new EPollData{ Int1 = tsocket.Key | DupKeyMask, Int2 = tsocket.Key | DupKeyMask } );
             return tsocket.WritableAwaitable;
         }
 
@@ -566,60 +569,54 @@ namespace Tmds.Kestrel.Linux
         private ReadableAwaitable Readable(TSocket tsocket)
         {
             tsocket.ResetReadableAwaitable();
-            RegisterForEvent(tsocket, EPollEvents.Readable);
-            return tsocket.ReadableAwaitable;
-        }
-
-        private void RegisterForEvent(TSocket tsocket, EPollEvents ev)
-        {
-            lock (tsocket)
+            bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
+            if (!registered)
             {
-                if (_state == State.Stopping)
-                {
-                    ThrowInvalidState();
-                }
-                SocketFlags oldFlags = tsocket.Flags;
-                try
-                {
-                    EPollOperation operation = (oldFlags & SocketFlags.EPollRegistered) == 0 ? EPollOperation.Add : EPollOperation.Modify;
-                    tsocket.Flags |= SocketFlags.EPollRegistered | (SocketFlags)ev;
-                    EPollEvents events = (EPollEvents)(tsocket.Flags & SocketFlags.EPollEventMask);
-                    _epoll.Control(operation, tsocket.Socket, events | EPollEvents.OneShot, new EPollData() { Int1 = tsocket.Key, Int2 = tsocket.Key });
-                }
-                catch
-                {
-                    tsocket.Flags = oldFlags;
-                    throw;
-                }
+                tsocket.AddFlags(SocketFlags.EPollRegistered);
             }
+            _epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
+                            tsocket.Socket,
+                            EPollEvents.Readable | EPollEvents.OneShot,
+                            new EPollData{ Int1 = tsocket.Key, Int2 = tsocket.Key });
+            return tsocket.ReadableAwaitable;
         }
 
         private void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
         {
-            lock (tsocket)
-            {
-                bool close = false;
-                if (shutdown == SocketShutdown.Send)
-                {
-                    tsocket.Flags |= SocketFlags.ShutdownSend;
-                    close = (tsocket.Flags & SocketFlags.ShutdownReceive) != 0;
-                }
-                else
-                {
-                    tsocket.Flags |= SocketFlags.ShutdownReceive;
-                    close = (tsocket.Flags & SocketFlags.ShutdownSend) != 0;
-                }
+            // One caller will end up calling Shutdown, the other will call Dispose.
+            // To ensure the Shutdown is executed against an open file descriptor
+            // we manually increment/decrement the refcount on the safehandle.
+            // We need to use a CER (Constrainted Execution Region) to ensure
+            // the refcount is decremented.
 
+            // This isn't available in .NET Core 1.x
+            // RuntimeHelpers.PrepareConstrainedRegions();
+            try
+            { }
+            finally
+            {
+                bool releaseRef = false;
+                tsocket.Socket.DangerousAddRef(ref releaseRef);
+                var previous = tsocket.AddFlags(shutdown == SocketShutdown.Send ? SocketFlags.ShutdownSend : SocketFlags.ShutdownReceive);
+                var other = shutdown == SocketShutdown.Send ? SocketFlags.ShutdownReceive : SocketFlags.ShutdownSend;
+                var close = (previous & other) != 0;
                 if (close)
                 {
                     TSocket removedSocket;
                     _sockets.TryRemove(tsocket.Key, out removedSocket);
-                    // close causes remove from epoll (CLOEXEC)
-                    tsocket.Socket.Dispose(); // will close (no concurrent users)
+                    tsocket.Socket.Dispose();
+                    tsocket.DupSocket?.Dispose();
                 }
                 else
                 {
                     tsocket.Socket.TryShutdown(shutdown);
+                }
+                // when CleanupSocket finished for both ends
+                // the close will be invoked by the next statement
+                // causing removal from the epoll
+                if (releaseRef)
+                {
+                    tsocket.Socket.DangerousRelease();
                 }
             }
         }
@@ -637,20 +634,8 @@ namespace Tmds.Kestrel.Linux
             {
                 var tsocket = kv.Value;
                 tsocket.PipeReader.CancelPendingRead();
-                EPollEvents pending = EPollEvents.None;
-                lock (tsocket)
-                {
-                    pending = (EPollEvents)(tsocket.Flags & SocketFlags.EPollEventMask);
-                    tsocket.Flags &= ~(SocketFlags)pending;
-                }
-                if ((pending & EPollEvents.Readable) != 0)
-                {
-                    tsocket.CompleteReadable(stopping: true);
-                }
-                if ((pending & EPollEvents.Writable) != 0)
-                {
-                    tsocket.CompleteWritable(stopping: true);
-                }
+                tsocket.CompleteReadable(stopping: true);
+                tsocket.CompleteWritable(stopping: true);
             }
 
             TaskCompletionSource<object> tcs;

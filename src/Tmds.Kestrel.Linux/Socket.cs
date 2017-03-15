@@ -51,6 +51,9 @@ namespace Tmds.Kestrel.Linux
 
         [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_GetSockName")]
         public static extern unsafe PosixResult GetSockName(Socket socket, byte* addr, int addrlen);
+
+        [DllImportAttribute(Interop.Library, EntryPoint = "TmdsKL_Duplicate")]
+        public static extern PosixResult Duplicate(Socket socket, out Socket dup);
     }
 
     class Socket : CloseSafeHandle
@@ -271,6 +274,19 @@ namespace Tmds.Kestrel.Linux
                 ep = null;
             }
             return rv;
+        }
+
+        public Socket Duplicate()
+        {
+            Socket dup;
+            var rv = TryDuplicate(out dup);
+            rv.ThrowOnError();
+            return dup;
+        }
+
+        public PosixResult TryDuplicate(out Socket dup)
+        {
+            return SocketInterop.Duplicate(this, out dup);
         }
     }
 }

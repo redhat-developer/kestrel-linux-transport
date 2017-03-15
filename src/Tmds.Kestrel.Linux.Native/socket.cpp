@@ -9,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <string.h>
+#include <fcntl.h>
 
 struct PalSocketAddress
 {
@@ -52,6 +53,7 @@ extern "C"
     PosixResult TmdsKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen);
     PosixResult TmdsKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
     PosixResult TmdsKL_GetSockName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
+    PosixResult TmdsKL_Duplicate(intptr_t socket, intptr_t* dup);
 }
 
 struct IPSocketAddress
@@ -929,6 +931,19 @@ PosixResult TmdsKL_GetSockName(intptr_t socket, PalSocketAddress* palSocketAddre
     {
         return SetPalSocketAddress(palSocketAddress, palEndPointLen, reinterpret_cast<sockaddr*>(&storage), sockLen);
     }
+
+    return ToPosixResult(rv);
+}
+
+PosixResult TmdsKL_Duplicate(intptr_t socket, intptr_t* dup)
+{
+    if (dup == nullptr)
+    {
+        return PosixResultEFAULT;
+    }
+    int fd = ToFileDescriptor(socket);
+    int rv = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    *dup = rv;
 
     return ToPosixResult(rv);
 }

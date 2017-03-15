@@ -202,6 +202,16 @@ namespace Tests
             socket.Dispose();
         }
 
+        [Fact]
+        public void Duplicate()
+        {
+            var socket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var dup = socket.Duplicate();
+            Assert.True(!dup.IsInvalid);
+            dup.Dispose();
+            socket.Dispose();
+        }
+
         internal static void CreateConnectedSockets(out Socket socket1, out Socket socket2, bool blocking, bool ipv4 = true)
         {
             var serverSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: true);

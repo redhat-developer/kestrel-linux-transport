@@ -12,32 +12,45 @@ namespace Tmds.Kestrel.Linux
         [Flags]
         enum SocketFlags
         {
-            AwaitReadable   = EPollEvents.Readable, // 0x01, EPOLLIN
-            AwaitWritable   = EPollEvents.Writable, // 0x04, EPOLLOUT
+            EPollRegistered = 0x01,
 
-            EPollEventMask  = AwaitReadable | AwaitWritable,
+            ShutdownSend    = 0x02,
+            ShutdownReceive = 0x04,
 
-            EPollRegistered = 0x08,
+            Stopping        = 0x08,
 
-            ShutdownSend    = 0x10,
-            ShutdownReceive = 0x20,
-
-            TypeAccept      = 0x00,
-            TypeClient      = 0x40,
-            TypePipe        = 0x80,
-
-            TypeMask        = 0xC0,
-
-            Stopping         = 0x100
+            TypeAccept      = 0x10,
+            TypeClient      = 0x20,
+            TypePipe        = 0x30,
+            TypeMask        = 0x30,
         }
 
         class TSocket : IReadableAwaiter, IWritableAwaiter, IConnectionInformation
         {
             private static readonly Action _completedSentinel = delegate { };
 
-            public SocketFlags Flags;
+            private int _flags;
+            public SocketFlags Flags
+            {
+                get { return (SocketFlags)_flags; }
+                set { _flags = (int)value; }
+            }
+
+            public SocketFlags AddFlags(SocketFlags flags)
+            {
+                int guess;
+                int oldValue = _flags;
+                do
+                {
+                    guess = oldValue;
+                    oldValue = Interlocked.CompareExchange(ref _flags, guess | (int)flags, guess);
+                } while (oldValue != guess);
+                return (SocketFlags)oldValue;
+            }
+
             public int         Key;
             public Socket      Socket;
+            public Socket      DupSocket;
             public IPipeReader PipeReader;
             public IPEndPoint  PeerAddress;
             public IPEndPoint  LocalAddress;
@@ -71,10 +84,7 @@ namespace Tmds.Kestrel.Linux
             {
                 if (stopping)
                 {
-                    lock (this)
-                    {
-                        Flags |= SocketFlags.Stopping;
-                    }
+                    AddFlags(SocketFlags.Stopping);
                 }
 
                 Action continuation = Interlocked.Exchange(ref _writableCompletion, _completedSentinel);
@@ -117,10 +127,7 @@ namespace Tmds.Kestrel.Linux
             {
                 if (stopping)
                 {
-                    lock (this)
-                    {
-                        Flags |= SocketFlags.Stopping;
-                    }
+                    AddFlags(SocketFlags.Stopping);
                 }
 
                 Action continuation = Interlocked.Exchange(ref _readableCompletion, _completedSentinel);
