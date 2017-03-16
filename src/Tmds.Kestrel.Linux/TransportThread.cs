@@ -17,13 +17,23 @@ namespace Tmds.Kestrel.Linux
         // the remaining bits of the EPollData are the key
         // of the _sockets dictionary.
         private const int DupKeyMask        = 1 << 31;
-        private static PipeOptions DefaultPipeOptions = new PipeOptions()
+        private static PipeOptions s_inputPipeOptions = new PipeOptions()
         {
-            // Ensure FlushAsync waits for the reader to catch-up
-            // https://github.com/dotnet/corefxlab/issues/1316
-            // TODO: What values to use here...?
+            // Don't prefetch: ReadAsync receives new bytes when all previous bytes are read
+            // Retrieving new bytes is synchronous with the ReadAsync call
             MaximumSizeHigh = 1,
-            MaximumSizeLow = 1
+            MaximumSizeLow =  1,
+            WriterScheduler = InlineScheduler.Default,
+            ReaderScheduler = InlineScheduler.Default,
+        };
+        private static PipeOptions s_outputPipeOptions = new PipeOptions()
+        {
+            // Let the OS buffer.
+            // FlushAsync will return when the bytes are sent to the socket
+            MaximumSizeHigh = 1,
+            MaximumSizeLow = 1,
+            WriterScheduler = InlineScheduler.Default,
+            ReaderScheduler = InlineScheduler.Default,
         };
 
         enum State
@@ -334,8 +344,8 @@ namespace Tmds.Kestrel.Linux
 
                 var connectionContext = _connectionHandler.OnConnection(
                         connectionInfo: tsocket,
-                        inputOptions: DefaultPipeOptions,
-                        outputOptions: DefaultPipeOptions);
+                        inputOptions: s_inputPipeOptions,
+                        outputOptions: s_outputPipeOptions);
                 tsocket.PipeReader = connectionContext.Output;
 
                 _sockets.TryAdd(key, tsocket);
