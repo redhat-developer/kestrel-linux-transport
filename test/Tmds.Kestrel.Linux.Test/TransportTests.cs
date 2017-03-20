@@ -262,6 +262,10 @@ namespace Tests
             Assert.True(segment.Count % 4 == 0);
             fixed (byte* bytePtr = segment.Array)
             {
+                if (s_travis)
+                {
+                    System.Console.WriteLine($"AssertCounter {new IntPtr(bytePtr)}, {segment.Count} bytes, starting at {value}");
+                }
                 int* intPtr = (int*)(bytePtr + segment.Offset);
                 for (int i = 0; i < segment.Count / 4; i++)
                 {
@@ -322,5 +326,7 @@ namespace Tests
             }
             remainderRef = remainder;
         }
+
+        private static bool s_travis = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("TRAVIS"));
     }
 }

@@ -231,7 +231,12 @@ namespace Tests
             // TODO: do tests run faster if we defer the blocking operation to the ThreadPool?
             PollEvents(epoll, maxEvents: 10, timeout: milliSecondTimeout);
             var endTime = Environment.TickCount;
-            Assert.True(endTime - startTime >= milliSecondTimeout);
+            bool timeoutOK = endTime - startTime >= milliSecondTimeout;
+            if (!timeoutOK)
+            {
+                System.Console.WriteLine($"{endTime - startTime} >= {milliSecondTimeout}");
+            }
+            Assert.True(timeoutOK);
 
             epoll.Dispose();
         }
@@ -297,22 +302,14 @@ namespace Tests
             bool isPackedEvents = EPoll.PackedEvents;
             EPollEvent* events = stackalloc EPollEvent[isPackedEvents ? 0 : maxEvents];
             EPollEventPacked* packedEvents = stackalloc EPollEventPacked[isPackedEvents ? maxEvents : 0];
-            var result = epoll.TryWait(events != null ? (void*)events : (void*)packedEvents, maxEvents, timeout);
-            if (result.IsSuccess)
+            int nrEvents = epoll.Wait(events != null ? (void*)events : (void*)packedEvents, maxEvents, timeout);
+            var retval = new EPollEvent[nrEvents];
+            for (int i = 0; i < nrEvents; i++)
             {
-                int nrEvents = result.Value;
-                var retval = new EPollEvent[nrEvents];
-                for (int i = 0; i < nrEvents; i++)
-                {
-                    retval[i].Events = isPackedEvents ? packedEvents[i].Events : events[i].Events;
-                    retval[i].Data   = isPackedEvents ? packedEvents[i].Data   : events[i].Data;
-                }
-                return retval;
+                retval[i].Events = isPackedEvents ? packedEvents[i].Events : events[i].Events;
+                retval[i].Data   = isPackedEvents ? packedEvents[i].Data   : events[i].Data;
             }
-            else
-            {
-                return null;
-            }
+            return retval;
         }
     }
 }
