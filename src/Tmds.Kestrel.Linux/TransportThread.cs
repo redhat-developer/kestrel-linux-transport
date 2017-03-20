@@ -427,27 +427,28 @@ namespace Tmds.Kestrel.Linux
 
         private static unsafe PosixResult TrySend(Socket socket, ref ReadableBuffer buffer)
         {
-            // 1KB ioVectors, At +-4KB per Memory -> 256KB send
-            const int MaxIOVecLength = 64;
-
-            int ioVecAllocate = 0;
+            // 64 IOVectors, take up 1KB of stack, can send up to 256KB
+            const int MaxIOVectorLength = 64;
+            int ioVectorLength = 0;
             foreach (var memory in buffer)
             {
-                if (memory.Length == 0) // It happens...
+                if (memory.Length == 0)
                 {
                     continue;
                 }
-                ioVecAllocate++;
-                if (ioVecAllocate == MaxIOVecLength)
+                ioVectorLength++;
+                if (ioVectorLength == MaxIOVectorLength)
                 {
+                    // No more room in the IOVector
                     break;
                 }
             }
-            if (ioVecAllocate == 0)
+            if (ioVectorLength == 0)
             {
                 return new PosixResult(0);
             }
-            var ioVectors = stackalloc IOVector[ioVecAllocate];
+
+            var ioVectors = stackalloc IOVector[ioVectorLength];
             int i = 0;
             foreach (var memory in buffer)
             {
@@ -466,9 +467,13 @@ namespace Tmds.Kestrel.Linux
                     throw new InvalidOperationException("Memory needs to be pinned");
                 }
                 i++;
+                if (i == ioVectorLength)
+                {
+                    // No more room in the IOVector
+                    break;
+                }
             }
-
-            return socket.TrySend(ioVectors, ioVecAllocate);
+            return socket.TrySend(ioVectors, ioVectorLength);
         }
 
         private WritableAwaitable Writable(TSocket tsocket)
@@ -510,41 +515,16 @@ namespace Tmds.Kestrel.Linux
                         break;
                     }
 
-                    // TODO: allocate to receive availableBytes
-                    // WritableBuffer doesn't support non-contiguous writes
-                    // https://github.com/dotnet/corefxlab/issues/1233
                     var buffer = writer.Alloc(2048);
                     try
                     {
                         // We need to call FlushAsync or Commit to end the write
-
-                        var result = TryReceive(tsocket.Socket, availableBytes, ref buffer);
-                        if (result.IsSuccess)
+                        Receive(tsocket.Socket, availableBytes, ref buffer);
+                        bool readerComplete = !await buffer.FlushAsync();
+                        if (readerComplete)
                         {
-                            if (result.Value == 0)
-                            {
-                                // EOF
-                                buffer.Commit();
-                                break;
-                            }
-                            else
-                            {
-                                buffer.Advance(result.Value);
-                                bool readerComplete = !await buffer.FlushAsync();
-                                if (readerComplete)
-                                {
-                                    // The reader has stopped
-                                    break;
-                                }
-                            }
-                        }
-                        else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
-                        {
-                            buffer.Commit();
-                        }
-                        else
-                        {
-                            result.ThrowOnError();
+                            // The reader has stopped
+                            break;
                         }
                     }
                     catch
@@ -565,15 +545,96 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        private unsafe PosixResult TryReceive(Socket socket, int availableBytes, ref WritableBuffer buffer)
+        private unsafe void Receive(Socket socket, int availableBytes, ref WritableBuffer buffer)
         {
-            void* pointer;
-            if (!buffer.Memory.TryGetPointer(out pointer))
+            // WritableBuffer doesn't support non-contiguous writes	
+            // https://github.com/dotnet/corefxlab/issues/1233
+            // We do it anyhow, but we need to make sure we fill every Memory we allocate.
+
+            // 64 IOVectors, take up 1KB of stack, can receive up to 256KB
+            const int MaxIOVectorLength = 64;
+            const int bytesPerMemory    = 4096 - 64; // MemoryPool._blockStride - MemoryPool._blockUnused
+            int ioVectorLength = availableBytes <= buffer.Memory.Length ? 1 :
+                    Math.Min(1 + (availableBytes - buffer.Memory.Length + bytesPerMemory - 1) / bytesPerMemory, MaxIOVectorLength);
+            var ioVectors = stackalloc IOVector[ioVectorLength];
+
+            var allocated = 0;
+            var advanced = 0;
+            int ioVectorsUsed = 0;
+            for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
             {
-                throw new InvalidOperationException("Pointer must be pinned");
+                buffer.Ensure(1);
+                var memory = buffer.Memory;
+                var length = buffer.Memory.Length;
+                void* pointer;
+                if (!buffer.Memory.TryGetPointer(out pointer))
+                {
+                    throw new InvalidOperationException("Pointer must be pinned");
+                }
+
+                ioVectors[ioVectorsUsed].Base = (byte*)pointer;
+                ioVectors[ioVectorsUsed].Count = new UIntPtr((uint)length);
+                allocated += length;
+
+                if (allocated >= availableBytes)
+                {
+                    // Every Memory (except the last one) must be filled completely.
+                    ioVectorsUsed++;
+                    break;
+                }
+
+                buffer.Advance(length);
+                advanced += length;
             }
-            IOVector ioVector = new IOVector { Base = (byte*) pointer, Count = new UIntPtr((uint)buffer.Memory.Length) };
-            return socket.TryReceive(&ioVector, 1);
+            var expectedMin = Math.Min(availableBytes, allocated);
+
+            // Ideally we get availableBytes in a single receive
+            // but we are happy if we get at least a part of it
+            // and we are willing to take {MaxEAgainCount} EAGAINs.
+            // Less data could be returned due to these reasons:
+            // * TCP URG
+            // * packet was not placed in receive queue (race with FIONREAD)
+            // * ?
+            const int MaxEAgainCount = 10;
+            var eAgainCount = 0;
+            var received = 0;
+            do
+            {
+                var result = socket.TryReceive(ioVectors, ioVectorsUsed);
+                if (result.IsSuccess)
+                {
+                    received += result.Value;
+                    if (received >= expectedMin)
+                    {
+                        // We made it!
+                        buffer.Advance(received - advanced);
+                        return;
+                    }
+                    eAgainCount = 0;
+                    // Update ioVectors to match bytes read
+                    uint skip = (uint)result.Value;
+                    for (int i = 0; (i < ioVectorsUsed) && (skip > 0); i++)
+                    {
+                        var length = ioVectors[i].Count.ToUInt32();
+                        var skipped = Math.Min(skip, length);
+                        ioVectors[i].Count = new UIntPtr(length - skipped);
+                        ioVectors[i].Base += skipped;
+                        skip -= skipped;
+                    }
+                }
+                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                {
+                    eAgainCount++;
+                    if (eAgainCount == MaxEAgainCount)
+                    {
+                        throw new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
+                    }
+                }
+                else
+                {
+                    result.ThrowOnError();
+                }
+            } while (true);
         }
 
         private ReadableAwaitable Readable(TSocket tsocket)

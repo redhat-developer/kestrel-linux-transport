@@ -23,7 +23,7 @@
           "type": "platform",
           "version": "1.0.1"
         },
-        "System.IO.Pipelines": "0.1.0-*"
+        "System.IO.Pipelines": "0.1.0-e170314-1"
       }
     }
   },

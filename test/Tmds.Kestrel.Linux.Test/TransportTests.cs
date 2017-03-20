@@ -1,6 +1,5 @@
 using System;
 using System.IO.Pipelines;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Tmds.Kestrel.Linux;
@@ -138,6 +137,188 @@ namespace Tests
                     }
                 }
             }
+        }
+
+        [Fact]
+        public async Task Receive()
+        {
+            // client send 1M bytes which are an int counter
+            // server receives and checkes the counting
+            const int receiveLength = 1000000;
+            TestServer.ConnectionHandler connectionHandler = async (input, output) =>
+            {
+                int bytesReceived = 0;
+                int remainder = 0; // remaining bytes between ReadableBuffers
+                while (true)
+                {
+                    var readResult = await input.ReadAsync();
+                    var buffer = readResult.Buffer;
+                    if (buffer.IsEmpty && readResult.IsCompleted)
+                    {
+                        input.Advance(buffer.End);
+                        break;
+                    }
+                    AssertCounter(ref buffer, ref bytesReceived, ref remainder);
+                    input.Advance(buffer.End);
+                }
+                Assert.Equal(receiveLength, bytesReceived);
+                output.Complete();
+                input.Complete();
+            };
+
+            using (var testServer = new TestServer(connectionHandler))
+            {
+                await testServer.BindAsync();
+                using (var client = testServer.ConnectTo())
+                {
+                    var buffer = new byte[1000000];
+                    FillBuffer(new ArraySegment<byte>(buffer), 0);
+                    int offset = 0;
+                    do
+                    {
+                        offset += client.Send(new ArraySegment<byte>(buffer, offset, buffer.Length - offset));
+                    } while (offset != buffer.Length);
+                    client.Shutdown(SocketShutdown.Send);
+
+                    // wait for the server to stop
+                    var receiveBuffer = new byte[1];
+                    client.Receive(new ArraySegment<byte>(receiveBuffer));
+                }
+            }
+        }
+
+        [Fact]
+        public async Task Send()
+        {
+            // server send 1M bytes which are an int counter
+            // client receives and checkes the counting
+            const int sendLength = 1000000;
+            TestServer.ConnectionHandler connectionHandler = async (input, output) =>
+            {
+                var buffer = output.Alloc(0);
+                FillBuffer(ref buffer, sendLength / 4);
+                await buffer.FlushAsync();
+                output.Complete();
+                input.Complete();
+            };
+
+            using (var testServer = new TestServer(connectionHandler))
+            {
+                await testServer.BindAsync();
+                using (var client = testServer.ConnectTo())
+                {
+                    int totalReceived = 0;
+                    var receiveBuffer = new byte[4000];
+                    bool eof = false;
+                    do
+                    {
+                        int offset = 0;
+                        int received = 0;
+                        do
+                        {
+                            var receive = client.Receive(new ArraySegment<byte>(receiveBuffer, offset, receiveBuffer.Length - offset));
+                            received += receive;
+                            offset += receive;
+                            eof = receive == 0;
+                        } while (!eof && offset != receiveBuffer.Length);
+
+                        AssertCounter(new ArraySegment<byte>(receiveBuffer, 0, received), totalReceived / 4);
+                        totalReceived += received;
+                    } while (!eof);
+                    Assert.True(totalReceived == sendLength);
+                }
+            }
+        }
+
+        private unsafe static void FillBuffer(ref WritableBuffer buffer, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                buffer.Ensure(4);
+                void* pointer;
+                Assert.True(buffer.Memory.TryGetPointer(out pointer));
+                *(int*)pointer = i;
+                buffer.Advance(4);
+            }
+        }
+
+        private unsafe static void FillBuffer(ArraySegment<byte> segment, int value)
+        {
+            Assert.True(segment.Count % 4 == 0);
+            fixed (byte* bytePtr = segment.Array)
+            {
+                int* intPtr = (int*)(bytePtr + segment.Offset);
+                for (int i = 0; i < segment.Count / 4; i++)
+                {
+                    *intPtr++ = value++;
+                }
+            }
+        }
+
+        private unsafe static void AssertCounter(ArraySegment<byte> segment, int value)
+        {
+            Assert.True(segment.Count % 4 == 0);
+            fixed (byte* bytePtr = segment.Array)
+            {
+                int* intPtr = (int*)(bytePtr + segment.Offset);
+                for (int i = 0; i < segment.Count / 4; i++)
+                {
+                    Assert.Equal(value++, *intPtr++);
+                }
+            }
+        }
+
+        private static unsafe void AssertCounter(ref ReadableBuffer buffer, ref int bytesReceived, ref int remainderRef)
+        {
+            int remainder = remainderRef;
+            int currentValue = bytesReceived / 4;
+            foreach (var memory in buffer)
+            {
+                void* pointer;
+                Assert.True(memory.TryGetPointer(out pointer));
+                byte* pMemory = (byte*)pointer;
+                int length = memory.Length;
+
+                // remainder
+                int offset = bytesReceived % 4;
+                if (offset != 0)
+                {
+                    int read = Math.Min(length, 4 - offset);
+                    byte* ptr = (byte*)&remainder;
+                    ptr += offset;
+                    for (int i = 0; i < read; i++)
+                    {
+                        *ptr++ = *pMemory++;
+                    }
+                    length -= read;
+                    if (read == (4 - offset))
+                    {
+                        Assert.Equal(currentValue++, remainder);
+                    }
+                }
+
+                // whole ints
+                int* pMemoryInt = (int*)pMemory;
+                int count = length / 4;
+                for (int i = 0; i < count; i++)
+                {
+                    Assert.Equal(currentValue++, *pMemoryInt++);
+                    length -= 4;
+                }
+
+                // remainder
+                if (length != 0)
+                {
+                    pMemory = (byte*)pMemoryInt;
+                    byte* ptr = (byte*)&remainder;
+                    for (int i = 0; i < length; i++)
+                    {
+                        *ptr++ = *pMemory++;
+                    }
+                }
+                bytesReceived += memory.Length;
+            }
+            remainderRef = remainder;
         }
     }
 }
