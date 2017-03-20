@@ -199,6 +199,7 @@ enum SocketOptionName : int32_t
     // Names for PAL_SOL_TCP
     PAL_SO_TCP_NODELAY = 1,
     // PAL_SO_TCP_BSDURGENT = 2,
+    PAL_SO_TCP_DEFER_ACCEPT = 3,
 
     // Names for PAL_SOL_UDP
     // PAL_SO_UDP_NOCHECKSUM = 1,
@@ -538,6 +539,10 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionName, int32_t socketO
                     return true;
 
                 // case PAL_SO_TCP_BSDURGENT:
+
+                case PAL_SO_TCP_DEFER_ACCEPT:
+                    optName = TCP_DEFER_ACCEPT;
+                    return true;
 
                 default:
                     return false;

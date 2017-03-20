@@ -57,6 +57,7 @@ namespace Tmds.Kestrel.Linux
         private PipeEndPair _pipeEnds;
         private Thread _thread;
         private TaskCompletionSource<object> _stateChangeCompletion;
+        private bool _deferAccept;
 
         public TransportThread(IConnectionHandler connectionHandler, TransportOptions options)
         {
@@ -65,6 +66,7 @@ namespace Tmds.Kestrel.Linux
                 throw new ArgumentNullException(nameof(connectionHandler));
             }
             _connectionHandler = connectionHandler;
+            _deferAccept = options.DeferAccept;
         }
 
         public void Start()
@@ -118,6 +120,7 @@ namespace Tmds.Kestrel.Linux
                 Socket acceptSocket = null;
                 int key = 0;
                 int port = endPoint.Port;
+                SocketFlags flags = SocketFlags.TypeAccept;
                 try
                 {
                     bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
@@ -132,6 +135,11 @@ namespace Tmds.Kestrel.Linux
                     acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
                     // Linux: allow concurrent binds and let the kernel do load-balancing
                     acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReusePort, 1);
+                    if (_deferAccept)
+                    {
+                        acceptSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.DeferAccept, 1);
+                        flags |= SocketFlags.DeferAccept;
+                    }
 
                     acceptSocket.Bind(endPoint);
                     if (port == 0)
@@ -153,7 +161,7 @@ namespace Tmds.Kestrel.Linux
                 {
                     tsocket = new TSocket()
                     {
-                        Flags = SocketFlags.TypeAccept,
+                        Flags = flags,
                         Key = key,
                         Socket = acceptSocket
                     };
@@ -350,8 +358,9 @@ namespace Tmds.Kestrel.Linux
 
                 _sockets.TryAdd(key, tsocket);
 
-                ReadFromSocket(tsocket, connectionContext.Input);
                 WriteToSocket(tsocket, connectionContext.Output);
+                bool dataAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
+                ReadFromSocket(tsocket, connectionContext.Input, dataAvailable);
             }
         }
 
@@ -366,39 +375,29 @@ namespace Tmds.Kestrel.Linux
                     ReadCursor end = buffer.End;
                     try
                     {
-                        if (buffer.IsEmpty && readResult.IsCompleted)
+                        if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
                         {
-                            // EOF
-                            break;
-                        }
-
-                        if (readResult.IsCancelled)
-                        {
-                            // TransportThread is stopping
+                            // EOF or TransportThread stopped
                             break;
                         }
 
                         if (!buffer.IsEmpty)
                         {
                             var result = TrySend(tsocket.Socket, ref buffer);
-                            if (result.IsSuccess)
+                            if (result.IsSuccess && result.Value != 0)
                             {
-                                if (result.Value != 0)
-                                {
-                                    end = buffer.Move(buffer.Start, result.Value);
-                                }
+                                end = buffer.Move(buffer.Start, result.Value);
                             }
                             else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                             {
-                                bool stopping = await Writable(tsocket);
-                                if (stopping)
+                                if (await Writable(tsocket))
                                 {
-                                    // TransportThread is stopping
-                                    break;
+                                    end = buffer.Start;
                                 }
                                 else
                                 {
-                                    end = buffer.Start;
+                                    // TransportThread stopped
+                                    break;
                                 }
                             }
                             else
@@ -495,42 +494,31 @@ namespace Tmds.Kestrel.Linux
             return tsocket.WritableAwaitable;
         }
 
-        private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer)
+        private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataAvailable)
         {
             try
             {
-                while (true)
+                bool stopped = !(dataAvailable || await Readable(tsocket));
+                while (!stopped)
                 {
-                    bool stopping = await Readable(tsocket);
-                    if (stopping)
-                    {
-                        // TransportThread is stopping
-                        break;
-                    }
-
                     var availableBytes = tsocket.Socket.GetAvailableBytes();
                     if (availableBytes == 0)
                     {
-                        // EOF
-                        break;
+                        stopped = true;
                     }
-
-                    var buffer = writer.Alloc(2048);
-                    try
+                    else
                     {
-                        // We need to call FlushAsync or Commit to end the write
-                        Receive(tsocket.Socket, availableBytes, ref buffer);
-                        bool readerComplete = !await buffer.FlushAsync();
-                        if (readerComplete)
+                        var buffer = writer.Alloc(2048);
+                        try
                         {
-                            // The reader has stopped
-                            break;
+                            Receive(tsocket.Socket, availableBytes, ref buffer);
+                            stopped = !(await buffer.FlushAsync() && await Readable(tsocket));
                         }
-                    }
-                    catch
-                    {
-                        buffer.Commit();
-                        throw;
+                        catch
+                        {
+                            buffer.Commit();
+                            throw;
+                        }
                     }
                 }
                 writer.Complete();

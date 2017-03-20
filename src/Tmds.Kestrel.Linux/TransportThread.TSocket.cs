@@ -12,6 +12,8 @@ namespace Tmds.Kestrel.Linux
         [Flags]
         enum SocketFlags
         {
+            None            = 0,
+
             EPollRegistered = 0x01,
 
             ShutdownSend    = 0x02,
@@ -23,6 +25,8 @@ namespace Tmds.Kestrel.Linux
             TypeClient      = 0x20,
             TypePipe        = 0x30,
             TypeMask        = 0x30,
+
+            DeferAccept     = 0x40
         }
 
         class TSocket : IReadableAwaiter, IWritableAwaiter, IConnectionInformation
@@ -65,7 +69,7 @@ namespace Tmds.Kestrel.Linux
             }
             bool IWritableAwaiter.GetResult()
             {
-                return (Flags & SocketFlags.Stopping) != 0;
+                return (Flags & SocketFlags.Stopping) == 0;
             }
             void IWritableAwaiter.OnCompleted(Action continuation)
             {
@@ -108,7 +112,7 @@ namespace Tmds.Kestrel.Linux
             }
             bool IReadableAwaiter.GetResult()
             {
-                return (Flags & SocketFlags.Stopping) != 0;
+                return (Flags & SocketFlags.Stopping) == 0;
             }
             void IReadableAwaiter.OnCompleted(Action continuation)
             {

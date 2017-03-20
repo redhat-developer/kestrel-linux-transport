@@ -185,6 +185,7 @@ namespace Tmds.Kestrel.Linux
         NoDelay = 1,
         //BsdUrgent = 2,
         //Expedited = 2,
+        DeferAccept = 3,
         #endregion
 
         #region SocketOptionlevel.Udp

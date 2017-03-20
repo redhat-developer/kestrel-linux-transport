@@ -6,6 +6,8 @@ namespace Tmds.Kestrel.Linux
     {
         public int ThreadCount { get; set; } = ProcessorThreadCount;
 
+        public bool DeferAccept { get; set; } = true;
+
         private static int ProcessorThreadCount
         {
             get

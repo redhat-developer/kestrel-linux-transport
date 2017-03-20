@@ -29,14 +29,15 @@ namespace Tests
         private IPEndPoint _serverAddress;
         private ConnectionHandler _connectionHandler;
 
-        public TestServer(ConnectionHandler connectionHandler, int threadCount = 1)
+        public TestServer(ConnectionHandler connectionHandler, bool deferAccept = false, int threadCount = 1)
         {
             _connectionHandler = connectionHandler;
             _pipeFactory = new PipeFactory();
             _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
             var transportOptions = new TransportOptions()
             {
-                ThreadCount = threadCount
+                ThreadCount = threadCount,
+                DeferAccept = deferAccept
             };
             _transport = new Transport(new IPEndPoint[] { _serverAddress }, this, transportOptions);
             _connectionHandler = connectionHandler;

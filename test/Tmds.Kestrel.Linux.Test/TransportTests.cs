@@ -10,10 +10,12 @@ namespace Tests
 {
     public class TransportTests
     {
-        [Fact]
-        public async Task Echo()
+        [InlineData(true)]
+        [InlineData(false)]
+        [Theory]
+        public async Task Echo(bool deferAccept)
         {
-            using (var testServer = new TestServer(TestServer.Echo))
+            using (var testServer = new TestServer(TestServer.Echo, deferAccept))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -33,7 +35,7 @@ namespace Tests
         [Fact]
         public async Task MultiThread()
         {
-            using (var testServer = new TestServer(connectionHandler: null, threadCount: 2))
+            using (var testServer = new TestServer(connectionHandler: null, deferAccept: false, threadCount: 2))
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
