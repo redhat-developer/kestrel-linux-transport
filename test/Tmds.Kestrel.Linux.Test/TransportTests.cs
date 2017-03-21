@@ -232,15 +232,15 @@ namespace Tests
             }
         }
 
-        private unsafe static void FillBuffer(ref WritableBuffer buffer, int count)
+        private unsafe static void FillBuffer(ref WritableBuffer wb, int count)
         {
             for (int i = 0; i < count; i++)
             {
-                buffer.Ensure(4);
+                wb.Ensure(4);
                 void* pointer;
-                Assert.True(buffer.Memory.TryGetPointer(out pointer));
+                Assert.True(wb.Buffer.TryGetPointer(out pointer));
                 *(int*)pointer = i;
-                buffer.Advance(4);
+                wb.Advance(4);
             }
         }
 

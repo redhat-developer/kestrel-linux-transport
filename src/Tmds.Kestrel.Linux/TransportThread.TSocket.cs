@@ -56,6 +56,7 @@ namespace Tmds.Kestrel.Linux
             public Socket      Socket;
             public Socket      DupSocket;
             public IPipeReader PipeReader;
+            public IPipeWriter PipeWriter;
             public IPEndPoint  PeerAddress;
             public IPEndPoint  LocalAddress;
 

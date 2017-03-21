@@ -18,7 +18,7 @@
         "NETStandard.Library": "1.6.1",
         "Tmds.Posix": "0.1.0-master-linux-*",
         "System.Threading.Thread": "4.3.0",
-        "System.IO.Pipelines": "0.1.0-e170314-1"
+        "System.IO.Pipelines": "0.1.0-*"
       }
     }
   },
