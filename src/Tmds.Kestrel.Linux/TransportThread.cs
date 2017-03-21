@@ -137,6 +137,7 @@ namespace Tmds.Kestrel.Linux
                     acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReusePort, 1);
                     if (_deferAccept)
                     {
+                        // Linux: wait up to 1 sec for data to arrive before accepting socket
                         acceptSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.DeferAccept, 1);
                         flags |= SocketFlags.DeferAccept;
                     }
@@ -360,8 +361,8 @@ namespace Tmds.Kestrel.Linux
                 _sockets.TryAdd(key, tsocket);
 
                 WriteToSocket(tsocket, connectionContext.Output);
-                bool dataAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
-                ReadFromSocket(tsocket, connectionContext.Input, dataAvailable);
+                bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
+                ReadFromSocket(tsocket, connectionContext.Input, dataMayBeAvailable);
             }
         }
 
@@ -495,33 +496,35 @@ namespace Tmds.Kestrel.Linux
             return tsocket.WritableAwaitable;
         }
 
-        private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataAvailable)
+        private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
             try
             {
-                bool stopped = !(dataAvailable || await Readable(tsocket));
-                while (!stopped)
+                var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
+                if (availableBytes == 0
+                 && await Readable(tsocket)) // Readable
                 {
-                    var availableBytes = tsocket.Socket.GetAvailableBytes();
-                    if (availableBytes == 0)
+                    availableBytes = tsocket.Socket.GetAvailableBytes();
+                }
+                while (availableBytes != 0)
+                {
+                    var buffer = writer.Alloc(2048);
+                    try
                     {
-                        stopped = true;
+                        Receive(tsocket.Socket, availableBytes, ref buffer);
+                        availableBytes = 0;
+                        var flushResult = await buffer.FlushAsync();
+                        if (!flushResult.IsCompleted // Reader hasn't stopped
+                         && !flushResult.IsCancelled // TransportThread hasn't stopped
+                         && await Readable(tsocket)) // Readable
+                        {
+                            availableBytes = tsocket.Socket.GetAvailableBytes();
+                        }
                     }
-                    else
+                    catch
                     {
-                        var buffer = writer.Alloc(2048);
-                        try
-                        {
-                            Receive(tsocket.Socket, availableBytes, ref buffer);
-                            var flushResult = await buffer.FlushAsync();
-                            stopped = flushResult.IsCompleted || flushResult.IsCancelled;
-                            stopped = stopped || !await Readable(tsocket);
-                        }
-                        catch
-                        {
-                            buffer.Commit();
-                            throw;
-                        }
+                        buffer.Commit();
+                        throw;
                     }
                 }
                 writer.Complete();

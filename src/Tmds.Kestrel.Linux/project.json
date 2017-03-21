@@ -7,7 +7,7 @@
   "packOptions": {
     "files": {
       "mappings": {
-        "lib/netstandard1.6/Tmds.Kestrel.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.Kestrel.Linux.Native.so"
+        "runtimes/linux-x64/native/Tmds.Kestrel.Linux.Native.so": "../../bin/Linux.x64.Release/Native/Tmds.Kestrel.Linux.Native.so"
       }
     }
   },
