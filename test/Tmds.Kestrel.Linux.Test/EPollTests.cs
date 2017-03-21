@@ -227,16 +227,11 @@ namespace Tests
             var epoll = EPoll.Create();
 
             var startTime = Environment.TickCount;
-            int milliSecondTimeout = 500;
-            // TODO: do tests run faster if we defer the blocking operation to the ThreadPool?
+            const int milliSecondTimeout = 500;
+            const int milliSecondMargin = 10;
             PollEvents(epoll, maxEvents: 10, timeout: milliSecondTimeout);
             var endTime = Environment.TickCount;
-            bool timeoutOK = endTime - startTime >= milliSecondTimeout;
-            if (!timeoutOK)
-            {
-                System.Console.WriteLine($"{endTime - startTime} >= {milliSecondTimeout}");
-            }
-            Assert.True(timeoutOK);
+            Assert.True(endTime - startTime > milliSecondTimeout - milliSecondMargin);
 
             epoll.Dispose();
         }
