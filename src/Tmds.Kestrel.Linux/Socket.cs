@@ -138,10 +138,10 @@ namespace Tmds.Kestrel.Linux
 
         public unsafe PosixResult TryReceive(ArraySegment<byte> buffer)
         {
-            // TODO: check buffer
+            ValidateSegment(buffer);
             fixed (byte* buf = buffer.Array)
             {
-                IOVector ioVector = new IOVector() { Base = buf, Count = new UIntPtr((uint)buffer.Count) };
+                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = new UIntPtr((uint)buffer.Count) };
                 return SocketInterop.Receive(this, &ioVector, 1);
             }
         }
@@ -178,10 +178,10 @@ namespace Tmds.Kestrel.Linux
 
         public unsafe PosixResult TrySend(ArraySegment<byte> buffer)
         {
-            // TODO: check buffer
+            ValidateSegment(buffer);
             fixed (byte* buf = buffer.Array)
             {
-                IOVector ioVector = new IOVector() { Base = buf, Count = new UIntPtr((uint)buffer.Count) };
+                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = new UIntPtr((uint)buffer.Count) };
                 return SocketInterop.Send(this, &ioVector, 1);
             }
         }
@@ -287,6 +287,21 @@ namespace Tmds.Kestrel.Linux
         public PosixResult TryDuplicate(out Socket dup)
         {
             return SocketInterop.Duplicate(this, out dup);
+        }
+
+        private static void ValidateSegment(ArraySegment<byte> segment)
+        {
+            // ArraySegment<byte> is not nullable.
+            if (segment.Array == null)
+            {
+                throw new ArgumentNullException(nameof(segment));
+            }
+
+            // Length zero is explicitly allowed
+            if (segment.Offset < 0 || segment.Count < 0 || segment.Count > (segment.Array.Length - segment.Offset))
+            {
+                throw new ArgumentOutOfRangeException(nameof(segment));
+            }
         }
     }
 }
