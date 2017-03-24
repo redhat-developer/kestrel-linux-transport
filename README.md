@@ -21,6 +21,35 @@ NuGet feed: `https://www.myget.org/F/tmds/api/v3/index.json`
 
 Dependency: `"Tmds.Kestrel.Linux": "0.1.0-*"`
 
+# Repo structure
+
+There are 4 projects in this repository:
+- src/Tmds.Kestrel.Linux: managed library implementing Transport
+- src/Tmds.Kestrel.Linux.Native: native library used by managed library
+- test/Tmds.Kestrel.Linux.Test: xunit test projects, has access to internals of managed library
+- test/Tmds.Kestrel.Linux.TestApp: empty application to use during development, has access to internals of managed library
+
+Before anything can be done, dependencies need to be restore:
+```
+$ dotnet restore
+```
+
+The library can be packaged by running the `dotnet pack` on src/Tmds.Kestrel.Linux.
+```
+$ dotnet pack src/Tmds.Kestrel.Linux --configuration Release
+```
+
+To build the library and run the tests execute `dotnet test` on test/Tmds.Kestrel.Linux.Test.
+```
+$ dotnet test test/Tmds.Kestrel.Linux.Test
+```
+
+It is also possible to build the native and managed parts of the library without executing tests.
+```
+$ src/build-native.sh
+$ dotnet build src/Tmds.Kestrel.Linux
+```
+
 # Design
 
 ## General
@@ -53,3 +82,15 @@ See [SocketAsyncEngine.Unix.cs](https://github.com/dotnet/corefx/blob/4611d411d8
 The implementation starts a number of threads which each accept connections. This is based on [`SO_REUSEPORT`](https://lwn.net/Articles/542629/)
 socket option. This option allow multiple sockets to concurrently bind and listen to the same port. The kernel performs
 load-balancing between the listen sockets.
+
+## Socket options
+
+### SO_REUSEPORT
+
+This option allow multiple sockets to concurrently bind and listen to the same port. The kernel performs
+load-balancing between the listen sockets.
+
+### TCP_DEFER_ACCEPT
+
+This option can be used for protocols where the client sends first (like HTTP). Instead of being notified of a new connection when the TCP connection is set-up,
+the application is notified when the connection was setup and data has arrived.
