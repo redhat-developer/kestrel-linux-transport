@@ -58,10 +58,16 @@ namespace Tmds.Kestrel.Linux
             var original = Interlocked.CompareExchange(ref _threads, threads, null);
             ThrowIfInvalidState(state: original, starting: true);
 
+            IPEndPoint[] endPoints = Interlocked.Exchange(ref _listenEndPoints, null);
+            if (endPoints == null)
+            {
+                throw new InvalidOperationException("Already bound");
+            }
+
             for (int i = 0; i < threads.Length; i++)
             {
                 threads[i].Start();
-                foreach (var listenEndPoint in _listenEndPoints)
+                foreach (var listenEndPoint in endPoints)
                 {
                     threads[i].AcceptOn(listenEndPoint);
                 }
