@@ -7,9 +7,18 @@ using Tmds.Kestrel.Linux;
 
 namespace Tests
 {
+    public delegate void TestServerConnectionHandler(IPipeReader input, IPipeWriter output);
+
+    class TestServerOptions
+    {
+        public int ThreadCount { get; set; } = 1;
+        public bool DeferAccept { get; set; } = false;
+        public ReadStrategy ReadStrategy { get; set; } = ReadStrategy.Available;
+        public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
+    }
+
     class TestServer : IConnectionHandler, IDisposable
     {
-        public delegate void ConnectionHandler(IPipeReader input, IPipeWriter output);
 
         class ConnectionContext : IConnectionContext
         {
@@ -27,21 +36,26 @@ namespace Tests
         private PipeFactory _pipeFactory;
         private Transport _transport;
         private IPEndPoint _serverAddress;
-        private ConnectionHandler _connectionHandler;
+        private TestServerConnectionHandler _connectionHandler;
 
-        public TestServer(ConnectionHandler connectionHandler, bool deferAccept = false, int threadCount = 1)
+        public TestServer(TestServerOptions options = null)
         {
-            _connectionHandler = connectionHandler;
+            options = options ?? new TestServerOptions();
+            _connectionHandler = options.ConnectionHandler;
             _pipeFactory = new PipeFactory();
             _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
             var transportOptions = new TransportOptions()
             {
-                ThreadCount = threadCount,
-                DeferAccept = deferAccept
+                ThreadCount = options.ThreadCount,
+                DeferAccept = options.DeferAccept,
+                ReadStrategy = options.ReadStrategy
             };
             _transport = new Transport(new IPEndPoint[] { _serverAddress }, this, transportOptions);
-            _connectionHandler = connectionHandler;
         }
+
+        public TestServer(TestServerConnectionHandler connectionHandler) :
+            this(new TestServerOptions() { ConnectionHandler = connectionHandler })
+        {}
 
         public Task BindAsync()
         {

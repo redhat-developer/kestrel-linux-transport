@@ -10,12 +10,15 @@ namespace Tests
 {
     public class TransportTests
     {
-        [InlineData(true)]
-        [InlineData(false)]
+        [InlineData(ReadStrategy.Available, true)]
+        [InlineData(ReadStrategy.Available, false)]
+        [InlineData(ReadStrategy.Fixed, true)]
+        [InlineData(ReadStrategy.Fixed, false)]
         [Theory]
-        public async Task Echo(bool deferAccept)
+        public async Task Echo(ReadStrategy readStrategy, bool deferAccept)
         {
-            using (var testServer = new TestServer(TestServer.Echo, deferAccept))
+            using (var testServer = new TestServer(new TestServerOptions() { DeferAccept = deferAccept,
+                                                                             ReadStrategy = readStrategy }))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -35,7 +38,7 @@ namespace Tests
         [Fact]
         public async Task MultiThread()
         {
-            using (var testServer = new TestServer(connectionHandler: null, deferAccept: false, threadCount: 2))
+            using (var testServer = new TestServer(new TestServerOptions() { ThreadCount = 2 }))
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
@@ -46,7 +49,7 @@ namespace Tests
         [Fact]
         public async Task Unbind()
         {
-            using (var testServer = new TestServer(TestServer.Echo))
+            using (var testServer = new TestServer())
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
@@ -55,10 +58,12 @@ namespace Tests
             }
         }
 
-        [Fact]
-        public async Task StopDisconnectsClient()
+        [InlineData(ReadStrategy.Fixed)]
+        [InlineData(ReadStrategy.Available)]
+        [Theory]
+        public async Task StopDisconnectsClient(ReadStrategy readStrategy)
         {
-            using (var testServer = new TestServer(TestServer.Echo))
+            using (var testServer = new TestServer(new TestServerOptions() { ReadStrategy = readStrategy }))
             {
                 await testServer.BindAsync();
 
@@ -92,7 +97,7 @@ namespace Tests
             const int bufferSize = 2048;
             int bytesWritten = 0;
             var waitingForWritable = new TaskCompletionSource<object>();
-            TestServer.ConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
                 Timer writeTimeout = new Timer(
                     // timeout -> we are waiting for the socket to become writable
@@ -141,13 +146,15 @@ namespace Tests
             }
         }
 
-        [Fact]
-        public async Task Receive()
+        [InlineData(ReadStrategy.Fixed)]
+        [InlineData(ReadStrategy.Available)]
+        [Theory]
+        public async Task Receive(ReadStrategy readStrategy)
         {
             // client send 1M bytes which are an int counter
             // server receives and checkes the counting
             const int receiveLength = 1000000;
-            TestServer.ConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
                 int bytesReceived = 0;
                 int remainder = 0; // remaining bytes between ReadableBuffers
@@ -168,7 +175,8 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = new TestServer(new TestServerOptions() { ConnectionHandler = connectionHandler,
+                                                                             ReadStrategy = readStrategy}))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -195,7 +203,7 @@ namespace Tests
             // server send 1M bytes which are an int counter
             // client receives and checkes the counting
             const int sendLength = 1000000;
-            TestServer.ConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
                 var buffer = output.Alloc(0);
                 FillBuffer(ref buffer, sendLength / 4);

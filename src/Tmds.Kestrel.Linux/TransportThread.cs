@@ -58,6 +58,7 @@ namespace Tmds.Kestrel.Linux
         private Thread _thread;
         private TaskCompletionSource<object> _stateChangeCompletion;
         private bool _deferAccept;
+        private ReadStrategy _readStrategy;
 
         public TransportThread(IConnectionHandler connectionHandler, TransportOptions options)
         {
@@ -67,6 +68,7 @@ namespace Tmds.Kestrel.Linux
             }
             _connectionHandler = connectionHandler;
             _deferAccept = options.DeferAccept;
+            _readStrategy = options.ReadStrategy;
         }
 
         public void Start()
@@ -362,7 +364,14 @@ namespace Tmds.Kestrel.Linux
 
                 WriteToSocket(tsocket, connectionContext.Output);
                 bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
-                ReadFromSocket(tsocket, connectionContext.Input, dataMayBeAvailable);
+                if (_readStrategy == ReadStrategy.Fixed)
+                {
+                    ReadFromSocketFixed(tsocket, connectionContext.Input, dataMayBeAvailable);
+                }
+                else // ReadStrategy.Available
+                {
+                    ReadFromSocketAvailable(tsocket, connectionContext.Input, dataMayBeAvailable);
+                }
             }
         }
 
@@ -496,7 +505,7 @@ namespace Tmds.Kestrel.Linux
             return tsocket.WritableAwaitable;
         }
 
-        private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
+        private async void ReadFromSocketAvailable(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
             try
             {
@@ -537,6 +546,82 @@ namespace Tmds.Kestrel.Linux
             {
                 CleanupSocket(tsocket, SocketShutdown.Receive);
             }
+        }
+
+        private async void ReadFromSocketFixed(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
+        {
+            try
+            {
+                bool eof = false;
+                if (!dataMayBeAvailable)
+                {
+                    eof = !await Readable(tsocket);
+                }
+                while (!eof)
+                {
+                    var buffer = writer.Alloc();
+                    try
+                    {
+                        var result = TryReceive(tsocket.Socket, ref buffer);
+                        if (result.IsSuccess)
+                        {
+                            if (result.Value != 0)
+                            {
+                                buffer.Advance(result.Value);
+                                var flushResult = await buffer.FlushAsync();
+                                eof = flushResult.IsCompleted || flushResult.IsCancelled;
+                            }
+                            else
+                            {
+                                buffer.Commit();
+                                eof = true;
+                            }
+                        }
+                        else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                        {
+                            buffer.Commit();
+                        }
+                        else
+                        {
+                            result.ThrowOnError();
+                        }
+                    }
+                    catch
+                    {
+                        buffer.Commit();
+                        throw;
+                    }
+                    if (!eof)
+                    {
+                        eof = !await Readable(tsocket);
+                    }
+                }
+                writer.Complete();
+            }
+            catch (Exception ex)
+            {
+                writer.Complete(ex);
+            }
+            finally
+            {
+                CleanupSocket(tsocket, SocketShutdown.Receive);
+            }
+        }
+
+        private unsafe PosixResult TryReceive(Socket socket, ref WritableBuffer wb)
+        {
+            IOVector ioVector;
+            wb.Ensure(2048);
+            var memory = wb.Buffer;
+            var length = wb.Buffer.Length;
+            void* pointer;
+            if (!wb.Buffer.TryGetPointer(out pointer))
+            {
+                throw new InvalidOperationException("Pointer must be pinned");
+            }
+            ioVector.Base = (byte*)pointer;
+            ioVector.Count = new UIntPtr((uint)length);
+            return socket.TryReceive(&ioVector, 1);
         }
 
         private unsafe void Receive(Socket socket, int availableBytes, ref WritableBuffer wb)
