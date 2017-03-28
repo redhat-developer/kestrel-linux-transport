@@ -9,8 +9,12 @@ using Tmds.Posix;
 
 namespace Tmds.Kestrel.Linux
 {
-    partial class TransportThread
+    sealed partial class TransportThread
     {
+        private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
+        // 64 IOVectors, take up 1KB of stack, can send/receive up to 256KB
+        const int MaxIOVectorLength = 64;
+
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
         // Highest bit set in EPollData for writable poll
@@ -19,19 +23,20 @@ namespace Tmds.Kestrel.Linux
         private const int DupKeyMask        = 1 << 31;
         private static PipeOptions s_inputPipeOptions = new PipeOptions()
         {
-            // Don't prefetch: ReadAsync receives new bytes when all previous bytes are read
-            // Retrieving new bytes is synchronous with the ReadAsync call
-            MaximumSizeHigh = 1,
-            MaximumSizeLow =  1,
+            // Would be nice if we could set this to 1 to limit prefetching to a single receive
+            // but we can't: https://github.com/dotnet/corefxlab/issues/1355
+            // ((Don't prefetch: ReadAsync receives new bytes when all previous bytes are read
+            // Retrieving new bytes is synchronous with the ReadAsync call))
+            MaximumSizeHigh = 2000,
+            MaximumSizeLow =  2000,
             WriterScheduler = InlineScheduler.Default,
             ReaderScheduler = InlineScheduler.Default,
         };
         private static PipeOptions s_outputPipeOptions = new PipeOptions()
         {
-            // Let the OS buffer.
-            // FlushAsync will return when the bytes are sent to the socket
-            MaximumSizeHigh = 1,
-            MaximumSizeLow = 1,
+            // Buffer as much as we can send in a single system call
+            MaximumSizeHigh = MaxIOVectorLength * MaxPooledBlockLength,
+            MaximumSizeLow = MaxIOVectorLength * MaxPooledBlockLength,
             WriterScheduler = InlineScheduler.Default,
             ReaderScheduler = InlineScheduler.Default,
         };
@@ -59,6 +64,7 @@ namespace Tmds.Kestrel.Linux
         private TaskCompletionSource<object> _stateChangeCompletion;
         private bool _deferAccept;
         private ReadStrategy _readStrategy;
+        private bool _coalesceWrites;
 
         public TransportThread(IConnectionHandler connectionHandler, TransportOptions options)
         {
@@ -69,6 +75,7 @@ namespace Tmds.Kestrel.Linux
             _connectionHandler = connectionHandler;
             _deferAccept = options.DeferAccept;
             _readStrategy = options.ReadStrategy;
+            _coalesceWrites = options.CoalesceWrites;
         }
 
         public void Start()
@@ -282,8 +289,7 @@ namespace Tmds.Kestrel.Linux
                     // 2:Int2 = Key   ==    Int1 = Key
                     // 3:~~~~~~~~~~         Int2 = Key
                     //                      ~~~~~~~~~~
-                    int events = *ptr++; // 0
-                    ptr++;               // 1
+                    ptr += 2;            // 0 & 1
                     int key = *ptr++;    // 2
                     if (notPacked)
                         ptr++;           // 3
@@ -382,6 +388,25 @@ namespace Tmds.Kestrel.Linux
                 while (true)
                 {
                     var readResult = await reader.ReadAsync();
+                    if (_coalesceWrites)
+                    {
+                        // wait so we can send more with a single syscall
+                        // We wait for Writable, but it may be more efficient to wait
+                        // for the next poll to return with a dedicated wait queue.
+                        try
+                        {
+                            if (!await Writable(tsocket))
+                            {
+                                // TransportThread stopped
+                                break;
+                            }
+                        }
+                        catch
+                        {
+                            reader.Advance(readResult.Buffer.End);
+                            throw;
+                        }
+                    }
                     var buffer = readResult.Buffer;
                     ReadCursor end = buffer.End;
                     try
@@ -401,11 +426,9 @@ namespace Tmds.Kestrel.Linux
                             }
                             else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                             {
-                                if (await Writable(tsocket))
-                                {
-                                    end = buffer.Start;
-                                }
-                                else
+                                end = buffer.Start;
+                                if (!_coalesceWrites
+                                  && !await Writable(tsocket))
                                 {
                                     // TransportThread stopped
                                     break;
@@ -437,8 +460,6 @@ namespace Tmds.Kestrel.Linux
 
         private static unsafe PosixResult TrySend(Socket socket, ref ReadableBuffer buffer)
         {
-            // 64 IOVectors, take up 1KB of stack, can send up to 256KB
-            const int MaxIOVectorLength = 64;
             int ioVectorLength = 0;
             foreach (var memory in buffer)
             {
@@ -467,15 +488,9 @@ namespace Tmds.Kestrel.Linux
                     continue;
                 }
                 void* pointer;
-                if (memory.TryGetPointer(out pointer))
-                {
-                    ioVectors[i].Base = (byte*)pointer;
-                    ioVectors[i].Count = new UIntPtr((uint)memory.Length);
-                }
-                else
-                {
-                    throw new InvalidOperationException("Memory needs to be pinned");
-                }
+                memory.TryGetPointer(out pointer);
+                ioVectors[i].Base = pointer;
+                ioVectors[i].Count = (void*)memory.Length;
                 i++;
                 if (i == ioVectorLength)
                 {
@@ -615,12 +630,9 @@ namespace Tmds.Kestrel.Linux
             var memory = wb.Buffer;
             var length = wb.Buffer.Length;
             void* pointer;
-            if (!wb.Buffer.TryGetPointer(out pointer))
-            {
-                throw new InvalidOperationException("Pointer must be pinned");
-            }
-            ioVector.Base = (byte*)pointer;
-            ioVector.Count = new UIntPtr((uint)length);
+            wb.Buffer.TryGetPointer(out pointer);
+            ioVector.Base = pointer;
+            ioVector.Count = (void*)length;
             return socket.TryReceive(&ioVector, 1);
         }
 
@@ -630,11 +642,8 @@ namespace Tmds.Kestrel.Linux
             // https://github.com/dotnet/corefxlab/issues/1233
             // We do it anyhow, but we need to make sure we fill every Memory we allocate.
 
-            // 64 IOVectors, take up 1KB of stack, can receive up to 256KB
-            const int MaxIOVectorLength = 64;
-            const int bytesPerMemory    = 4096 - 64; // MemoryPool._blockStride - MemoryPool._blockUnused
             int ioVectorLength = availableBytes <= wb.Buffer.Length ? 1 :
-                    Math.Min(1 + (availableBytes - wb.Buffer.Length + bytesPerMemory - 1) / bytesPerMemory, MaxIOVectorLength);
+                    Math.Min(1 + (availableBytes - wb.Buffer.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorLength);
             var ioVectors = stackalloc IOVector[ioVectorLength];
 
             var allocated = 0;
@@ -644,15 +653,12 @@ namespace Tmds.Kestrel.Linux
             {
                 wb.Ensure(1);
                 var memory = wb.Buffer;
-                var length = wb.Buffer.Length;
+                var length = memory.Length;
                 void* pointer;
-                if (!wb.Buffer.TryGetPointer(out pointer))
-                {
-                    throw new InvalidOperationException("Pointer must be pinned");
-                }
+                wb.Buffer.TryGetPointer(out pointer);
 
-                ioVectors[ioVectorsUsed].Base = (byte*)pointer;
-                ioVectors[ioVectorsUsed].Count = new UIntPtr((uint)length);
+                ioVectors[ioVectorsUsed].Base = pointer;
+                ioVectors[ioVectorsUsed].Count = (void*)length;
                 allocated += length;
 
                 if (allocated >= availableBytes)
@@ -691,13 +697,13 @@ namespace Tmds.Kestrel.Linux
                     }
                     eAgainCount = 0;
                     // Update ioVectors to match bytes read
-                    uint skip = (uint)result.Value;
+                    var skip = result.Value;
                     for (int i = 0; (i < ioVectorsUsed) && (skip > 0); i++)
                     {
-                        var length = ioVectors[i].Count.ToUInt32();
+                        var length = (int)ioVectors[i].Count;
                         var skipped = Math.Min(skip, length);
-                        ioVectors[i].Count = new UIntPtr(length - skipped);
-                        ioVectors[i].Base += skipped;
+                        ioVectors[i].Count = (void*)(length - skipped);
+                        ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
                         skip -= skipped;
                     }
                 }

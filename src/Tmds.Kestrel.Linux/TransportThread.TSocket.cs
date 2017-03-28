@@ -7,7 +7,7 @@ using Kestrel;
 
 namespace Tmds.Kestrel.Linux
 {
-    partial class TransportThread
+    sealed partial class TransportThread
     {
         [Flags]
         enum SocketFlags
@@ -29,7 +29,7 @@ namespace Tmds.Kestrel.Linux
             DeferAccept     = 0x40
         }
 
-        class TSocket : IReadableAwaiter, IWritableAwaiter, IConnectionInformation
+        sealed class TSocket : IReadableAwaiter, IWritableAwaiter, IConnectionInformation
         {
             private static readonly Action _completedSentinel = delegate { };
 

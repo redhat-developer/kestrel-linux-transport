@@ -7,8 +7,8 @@ namespace Tmds.Kestrel.Linux
 {
     unsafe struct IOVector
     {
-        public byte* Base;
-        public UIntPtr Count;
+        public void* Base;
+        public void* Count;
     }
 
     static class SocketInterop
@@ -141,7 +141,7 @@ namespace Tmds.Kestrel.Linux
             ValidateSegment(buffer);
             fixed (byte* buf = buffer.Array)
             {
-                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = new UIntPtr((uint)buffer.Count) };
+                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = (void*)buffer.Count };
                 return SocketInterop.Receive(this, &ioVector, 1);
             }
         }
@@ -181,7 +181,7 @@ namespace Tmds.Kestrel.Linux
             ValidateSegment(buffer);
             fixed (byte* buf = buffer.Array)
             {
-                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = new UIntPtr((uint)buffer.Count) };
+                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = (void*)buffer.Count };
                 return SocketInterop.Send(this, &ioVector, 1);
             }
         }

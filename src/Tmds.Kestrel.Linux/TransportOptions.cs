@@ -18,6 +18,8 @@ namespace Tmds.Kestrel.Linux
 
         public bool DeferAccept { get; set; } = true;
 
+        public bool CoalesceWrites { get; set; } = true;
+
         public ReadStrategy ReadStrategy { get; set; } = ReadStrategy.Available;
 
         private static int ProcessorThreadCount
