@@ -13,14 +13,15 @@ namespace Tmds.Kestrel.Linux
     {
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
         // 64 IOVectors, take up 1KB of stack, can send/receive up to 256KB
-        const int MaxIOVectorLength = 64;
-
+        private const int MaxIOVectorLength = 64;
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
         // Highest bit set in EPollData for writable poll
         // the remaining bits of the EPollData are the key
         // of the _sockets dictionary.
         private const int DupKeyMask        = 1 << 31;
+        private const byte PipeStateChange  = 0;
+        private const byte PipeCoalesce     = 1;
         private static PipeOptions s_inputPipeOptions = new PipeOptions()
         {
             // Would be nice if we could set this to 1 to limit prefetching to a single receive
@@ -57,6 +58,8 @@ namespace Tmds.Kestrel.Linux
         private readonly object _gate = new object();
         // key is the file descriptor
         private ConcurrentDictionary<int, TSocket> _sockets;
+        private ConcurrentQueue<TSocket> _coalescingWrites;
+        private int _coalesceWritesOnNextPoll;
         private List<TSocket> _acceptSockets;
         private EPoll _epoll;
         private PipeEndPair _pipeEnds;
@@ -90,6 +93,10 @@ namespace Tmds.Kestrel.Linux
                 {
                     _sockets = new ConcurrentDictionary<int, TSocket>();
                     _acceptSockets = new List<TSocket>();
+                    if (_coalesceWrites)
+                    {
+                        _coalescingWrites = new ConcurrentQueue<TSocket>();
+                    }
 
                     _epoll = EPoll.Create();
 
@@ -217,7 +224,7 @@ namespace Tmds.Kestrel.Linux
                 tcs = _stateChangeCompletion = new TaskCompletionSource<object>();
                 _state = State.ClosingAccept;
             }
-            _pipeEnds.WriteEnd.WriteByte(0);
+            _pipeEnds.WriteEnd.WriteByte(PipeStateChange);
             return tcs.Task;
         }
 
@@ -264,7 +271,7 @@ namespace Tmds.Kestrel.Linux
             }
             if (triggerStateChange)
             {
-                _pipeEnds.WriteEnd.WriteByte(0);
+                _pipeEnds.WriteEnd.WriteByte(PipeStateChange);
             }
             await tcs.Task;
         }
@@ -279,6 +286,10 @@ namespace Tmds.Kestrel.Linux
             {
                 bool doCloseAccept = false;
                 int numEvents = _epoll.Wait(buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite);
+                if (_coalesceWrites)
+                {
+                    DoCoalescedWrites();
+                }
                 int* ptr = buffer;
                 for (int i = 0; i < numEvents; i++)
                 {
@@ -315,7 +326,11 @@ namespace Tmds.Kestrel.Linux
                         }
                         else // TypePipe
                         {
-                            HandleState(ref running, ref doCloseAccept);
+                            var action = _pipeEnds.ReadEnd.TryReadByte();
+                            if (action.Value == PipeStateChange)
+                            {
+                                HandleState(ref running, ref doCloseAccept);
+                            }
                         }
                     }
                 }
@@ -325,6 +340,18 @@ namespace Tmds.Kestrel.Linux
                 }
             }
             Stop();
+        }
+
+        private void DoCoalescedWrites()
+        {
+            Volatile.Write(ref _coalesceWritesOnNextPoll, 0);
+            int count = _coalescingWrites.Count;
+            for (int i = 0; i < count; i++)
+            {
+                TSocket tsocket;
+                _coalescingWrites.TryDequeue(out tsocket);
+                tsocket.CompleteWritable();
+            }
         }
 
         private void HandleAccept(TSocket tacceptSocket)
@@ -388,27 +415,24 @@ namespace Tmds.Kestrel.Linux
                 while (true)
                 {
                     var readResult = await reader.ReadAsync();
+                    ReadableBuffer buffer = readResult.Buffer;
                     if (_coalesceWrites)
                     {
-                        // wait so we can send more with a single syscall
-                        // We wait for Writable, but it may be more efficient to wait
-                        // for the next poll to return with a dedicated wait queue.
-                        try
+                        reader.Advance(default(ReadCursor));
+                        if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
                         {
-                            if (!await Writable(tsocket))
-                            {
-                                // TransportThread stopped
-                                break;
-                            }
+                            // EOF or TransportThread stopped
+                            break;
                         }
-                        catch
+                        if (!await CoalescingWrites(tsocket))
                         {
-                            reader.Advance(readResult.Buffer.End);
-                            throw;
+                            // TransportThread stopped
+                            break;
                         }
+                        readResult = await reader.ReadAsync();
+                        buffer = readResult.Buffer;
                     }
-                    var buffer = readResult.Buffer;
-                    ReadCursor end = buffer.End;
+                    ReadCursor end = buffer.Start;
                     try
                     {
                         if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
@@ -416,19 +440,16 @@ namespace Tmds.Kestrel.Linux
                             // EOF or TransportThread stopped
                             break;
                         }
-
                         if (!buffer.IsEmpty)
                         {
                             var result = TrySend(tsocket.Socket, ref buffer);
                             if (result.IsSuccess && result.Value != 0)
                             {
-                                end = buffer.Move(buffer.Start, result.Value);
+                                end = result.Value == buffer.Length ? buffer.End : buffer.Move(buffer.Start, result.Value);
                             }
                             else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                             {
-                                end = buffer.Start;
-                                if (!_coalesceWrites
-                                  && !await Writable(tsocket))
+                                if (!await Writable(tsocket))
                                 {
                                     // TransportThread stopped
                                     break;
@@ -499,6 +520,18 @@ namespace Tmds.Kestrel.Linux
                 }
             }
             return socket.TrySend(ioVectors, ioVectorLength);
+        }
+
+        private WritableAwaitable CoalescingWrites(TSocket tsocket)
+        {
+            tsocket.ResetWritableAwaitable();
+            _coalescingWrites.Enqueue(tsocket);
+            var pending = Interlocked.CompareExchange(ref _coalesceWritesOnNextPoll, 1, 0);
+            if (pending == 0)
+            {
+                _pipeEnds.WriteEnd.WriteByte(PipeCoalesce);
+            }
+            return tsocket.WritableAwaitable;
         }
 
         private WritableAwaitable Writable(TSocket tsocket)
@@ -784,7 +817,6 @@ namespace Tmds.Kestrel.Linux
             var pipeReadKey = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
             TSocket pipeReadSocket;
             _sockets.TryRemove(pipeReadKey, out pipeReadSocket);
-            _pipeEnds.Dispose();
 
             foreach (var kv in _sockets)
             {
@@ -794,6 +826,14 @@ namespace Tmds.Kestrel.Linux
                 tsocket.CompleteReadable(stopping: true);
                 tsocket.CompleteWritable(stopping: true);
             }
+
+            SpinWait sw = new SpinWait();
+            while (!_sockets.IsEmpty)
+            {
+                sw.SpinOnce();
+            }
+
+            _pipeEnds.Dispose();
 
             TaskCompletionSource<object> tcs;
             lock (_gate)
@@ -827,7 +867,6 @@ namespace Tmds.Kestrel.Linux
 
         private unsafe void HandleState(ref bool running, ref bool doCloseAccept)
         {
-            _pipeEnds.ReadEnd.TryReadByte();
             lock (_gate)
             {
                 if (_state == State.ClosingAccept)
