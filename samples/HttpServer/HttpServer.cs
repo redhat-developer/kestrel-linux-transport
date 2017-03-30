@@ -2,7 +2,9 @@ using System;
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Formatting;
-using Kestrel;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Tmds.Kestrel.Linux;
 
 namespace ConsoleApplication
 {
@@ -19,15 +21,21 @@ namespace ConsoleApplication
             public string ConnectionId { get; }
             public IPipeWriter Input { get; }
             public IPipeReader Output { get; }
+
+            // TODO: Remove these (Use Pipes instead?)
+            Task IConnectionContext.StopAsync() { throw new NotSupportedException(); }
+            void IConnectionContext.Abort(Exception ex) { throw new NotSupportedException(); }
+            void IConnectionContext.Timeout() { throw new NotSupportedException(); }
         }
 
         public HttpServer()
         {}
         
-        public IConnectionContext OnConnection(PipeFactory factory, IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions)
+        public IConnectionContext OnConnection(IConnectionInformation connectionInformation)
         {
-            var input = factory.Create(inputOptions);
-            var output = factory.Create(outputOptions);
+            var factory = connectionInformation.PipeFactory;
+            var input = factory.Create(Transport.InputPipeOptions);
+            var output = factory.Create(Transport.OutputPipeOptions);
 
             HandleConnection(input.Reader, output.Writer);
 

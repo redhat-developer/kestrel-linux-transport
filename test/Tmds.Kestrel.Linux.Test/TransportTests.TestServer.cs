@@ -2,7 +2,7 @@ using System;
 using System.IO.Pipelines;
 using System.Net;
 using System.Threading.Tasks;
-using Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel.Transport;
 using Tmds.Kestrel.Linux;
 
 namespace Tests
@@ -18,7 +18,6 @@ namespace Tests
 
     class TestServer : IConnectionHandler, IDisposable
     {
-
         class ConnectionContext : IConnectionContext
         {
             public ConnectionContext(string connectionId, IPipeWriter input, IPipeReader output)
@@ -30,6 +29,11 @@ namespace Tests
             public string ConnectionId { get; }
             public IPipeWriter Input { get; }
             public IPipeReader Output { get; }
+
+            // TODO: Remove these (Use Pipes instead?)
+            Task IConnectionContext.StopAsync() { throw new NotSupportedException(); }
+            void IConnectionContext.Abort(Exception ex) { throw new NotSupportedException(); }
+            void IConnectionContext.Timeout() { throw new NotSupportedException(); }
         }
 
         private Transport _transport;
@@ -68,10 +72,11 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public IConnectionContext OnConnection(PipeFactory factory, IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions)
+        public IConnectionContext OnConnection(IConnectionInformation connectionInformation)
         {
-            var input = factory.Create(inputOptions);
-            var output = factory.Create(outputOptions);
+            var factory = connectionInformation.PipeFactory;
+            var input = factory.Create(Transport.InputPipeOptions);
+            var output = factory.Create(Transport.OutputPipeOptions);
 
             _connectionHandler(input.Reader, output.Writer);
 

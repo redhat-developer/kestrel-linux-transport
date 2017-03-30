@@ -5,7 +5,8 @@ using System.Collections.Generic;
 using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
-using Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel.Transport;
 using Tmds.Posix;
 
 namespace Tmds.Kestrel.Linux
@@ -17,7 +18,7 @@ namespace Tmds.Kestrel.Linux
         private const int MaxIOVectorSendLength = 32;
         // 32 IOVectors, take up 512B of stack, can receive up to 128KB
         private const int MaxIOVectorReceiveLength = 32;
-        private const int MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
+        internal const int MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
         // Highest bit set in EPollData for writable poll
@@ -26,25 +27,6 @@ namespace Tmds.Kestrel.Linux
         private const int DupKeyMask        = 1 << 31;
         private const byte PipeStateChange  = 0;
         private const byte PipeCoalesce     = 1;
-        private static PipeOptions s_inputPipeOptions = new PipeOptions()
-        {
-            // Would be nice if we could set this to 1 to limit prefetching to a single receive
-            // but we can't: https://github.com/dotnet/corefxlab/issues/1355
-            // ((Don't prefetch: ReadAsync receives new bytes when all previous bytes are read
-            // Retrieving new bytes is synchronous with the ReadAsync call))
-            MaximumSizeHigh = 2000,
-            MaximumSizeLow =  2000,
-            WriterScheduler = InlineScheduler.Default,
-            ReaderScheduler = InlineScheduler.Default,
-        };
-        private static PipeOptions s_outputPipeOptions = new PipeOptions()
-        {
-            // Buffer as much as we can send in a single system call
-            MaximumSizeHigh = MaxSendLength,
-            MaximumSizeLow = MaxSendLength,
-            WriterScheduler = InlineScheduler.Default,
-            ReaderScheduler = InlineScheduler.Default,
-        };
         unsafe struct ReceiveBuffer
         {
             public fixed long IOVectors[2 * MaxIOVectorReceiveLength];
@@ -82,8 +64,9 @@ namespace Tmds.Kestrel.Linux
         private OwnedBuffer<byte>[] _receivePool;
         private PipeFactory _pipeFactory;
         private MemoryPool _bufferPool;
+        private ListenOptions _listenOptions;
 
-        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int cpuId)
+        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int cpuId, ListenOptions listenOptions)
         {
             if (connectionHandler == null)
             {
@@ -94,6 +77,7 @@ namespace Tmds.Kestrel.Linux
             _coalesceWrites = options.CoalesceWrites;
             _cpuId = cpuId;
             _receiveOnIncomingCpu = options.ReceiveOnIncomingCpu;
+            _listenOptions = listenOptions;
         }
 
         public Task StartAsync()
@@ -125,7 +109,7 @@ namespace Tmds.Kestrel.Linux
                     _epoll = EPoll.Create();
 
                     _pipeEnds = PipeEnd.CreatePair(blocking: false);
-                    var tsocket = new TSocket()
+                    var tsocket = new TSocket(this)
                     {
                         Flags = SocketFlags.TypePipe,
                         Key = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32()
@@ -216,7 +200,7 @@ namespace Tmds.Kestrel.Linux
                 TSocket tsocket = null;
                 try
                 {
-                    tsocket = new TSocket()
+                    tsocket = new TSocket(this)
                     {
                         Flags = flags,
                         Key = key,
@@ -456,7 +440,7 @@ namespace Tmds.Kestrel.Linux
                 {
                     key = clientSocket.DangerousGetHandle().ToInt32();
 
-                    tsocket = new TSocket()
+                    tsocket = new TSocket(this)
                     {
                         Flags = SocketFlags.TypeClient,
                         Key = key,
@@ -473,11 +457,7 @@ namespace Tmds.Kestrel.Linux
                     return;
                 }
 
-                var connectionContext = _connectionHandler.OnConnection(
-                        _pipeFactory,
-                        connectionInfo: tsocket,
-                        inputOptions: s_inputPipeOptions,
-                        outputOptions: s_outputPipeOptions);
+                var connectionContext = _connectionHandler.OnConnection(tsocket);
                 tsocket.PipeReader = connectionContext.Output;
                 tsocket.PipeWriter = connectionContext.Input;
 

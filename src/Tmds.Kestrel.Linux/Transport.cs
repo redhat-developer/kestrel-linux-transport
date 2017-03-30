@@ -1,20 +1,46 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel.Transport;
 
 namespace Tmds.Kestrel.Linux
 {
-    public class Transport
+    public class Transport : ITransport
     {
         private static readonly TransportThread[] EmptyThreads = Array.Empty<TransportThread>();
+        private ListenOptions _listenOptions;
         private IPEndPoint[] _listenEndPoints;
         private IConnectionHandler _connectionHandler;
         private TransportThread[] _threads;
         private TransportOptions _transportOptions;
+
+        public Transport(ListenOptions listenOptions, IConnectionHandler connectionHandler, TransportOptions transportOptions) :
+            this(CreateEndPointsFromListenOptions(listenOptions), connectionHandler, transportOptions)
+        {
+            _listenOptions = listenOptions;
+        }
+
+        private static IPEndPoint[] CreateEndPointsFromListenOptions(ListenOptions listenOptions)
+        {
+            if (listenOptions == null)
+            {
+                throw new ArgumentNullException(nameof(listenOptions));
+            }
+            if (listenOptions.Type != ListenType.IPEndPoint)
+            {
+                throw new NotSupportedException("Only IPEndPoints are supported.");
+            }
+            if (listenOptions.IPEndPoint == null)
+            {
+                throw new ArgumentNullException(nameof(listenOptions.IPEndPoint));
+            }
+
+            return new IPEndPoint[1] { listenOptions.IPEndPoint };
+        }
 
         public Transport(IPEndPoint[] listenEndPoints, IConnectionHandler connectionHandler, TransportOptions transportOptions)
         {
@@ -94,7 +120,7 @@ namespace Tmds.Kestrel.Linux
             for (int i = 0; i < _transportOptions.ThreadCount; i++)
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
-                var thread = new TransportThread(_connectionHandler, _transportOptions, cpuId);
+                var thread = new TransportThread(_connectionHandler, _transportOptions, cpuId, _listenOptions);
                 threads[i] = thread;
             }
             return threads;
@@ -190,5 +216,27 @@ namespace Tmds.Kestrel.Linux
                 throw new InvalidOperationException("Already starting");
             }
         }
+
+        // TODO: We'd like Kestrel to use these values for MaximumSize{Low,Heigh} but the abstraction
+        //       doesn't support it.
+        public static PipeOptions InputPipeOptions = new PipeOptions()
+        {
+            // Would be nice if we could set this to 1 to limit prefetching to a single receive
+            // but we can't: https://github.com/dotnet/corefxlab/issues/1355
+            MaximumSizeHigh = 2000,
+            MaximumSizeLow =  2000,
+            WriterScheduler = InlineScheduler.Default,
+            ReaderScheduler = InlineScheduler.Default,
+        };
+
+        public static PipeOptions OutputPipeOptions = new PipeOptions()
+        {
+            // Buffer as much as we can send in a single system call
+            // Wait until everything is sent.
+            MaximumSizeHigh = TransportThread.MaxSendLength,
+            MaximumSizeLow = 1,
+            WriterScheduler = InlineScheduler.Default,
+            ReaderScheduler = InlineScheduler.Default,
+        };
     }
 }

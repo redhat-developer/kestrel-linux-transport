@@ -3,7 +3,9 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel;
+using Microsoft.AspNetCore.Server.Kestrel.Internal.Http;
+using Microsoft.AspNetCore.Server.Kestrel.Transport;
 
 namespace Tmds.Kestrel.Linux
 {
@@ -29,8 +31,30 @@ namespace Tmds.Kestrel.Linux
             DeferAccept     = 0x40
         }
 
+        // TODO: we don't support this and it looks like this will be removed from the
+        //       IConnectionInformation interface
+        class UnsupportedTimeoutControl : ITimeoutControl
+        {
+            public void CancelTimeout()
+            {
+            }
+
+            public void ResetTimeout(long milliseconds, TimeoutAction timeoutAction)
+            {
+            }
+
+            public void SetTimeout(long milliseconds, TimeoutAction timeoutAction)
+            {
+            }
+        }
+
         class TSocket : IWritableAwaiter, IConnectionInformation
         {
+            private TransportThread _thread;
+            public TSocket(TransportThread thread)
+            {
+                _thread = thread;
+            }
             private static readonly Action _completedSentinel = delegate { };
 
             private int _flags;
@@ -128,6 +152,18 @@ namespace Tmds.Kestrel.Linux
             IPEndPoint IConnectionInformation.RemoteEndPoint => PeerAddress;
 
             IPEndPoint IConnectionInformation.LocalEndPoint => LocalAddress;
+
+            // TODO: who is using this?
+            ListenOptions IConnectionInformation.ListenOptions => _thread._listenOptions;
+
+            PipeFactory IConnectionInformation.PipeFactory => _thread._pipeFactory;
+
+            IScheduler IConnectionInformation.InputWriterScheduler => InlineScheduler.Default;
+
+            IScheduler IConnectionInformation.OutputWriterScheduler => InlineScheduler.Default;
+
+            private static ITimeoutControl _timeoutControl = new UnsupportedTimeoutControl();
+            ITimeoutControl IConnectionInformation.TimeoutControl => _timeoutControl;
         }
 
         interface IWritableAwaiter
