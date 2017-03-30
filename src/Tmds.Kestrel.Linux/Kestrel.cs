@@ -7,7 +7,7 @@ namespace Kestrel
 
     public interface IConnectionHandler
     {
-        IConnectionContext OnConnection(IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions);
+        IConnectionContext OnConnection(PipeFactory factory, IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions);
     }
 
     public interface IConnectionContext

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO.Pipelines;
@@ -12,8 +13,11 @@ namespace Tmds.Kestrel.Linux
     sealed partial class TransportThread
     {
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
-        // 64 IOVectors, take up 1KB of stack, can send/receive up to 256KB
-        private const int MaxIOVectorLength = 64;
+        // 32 IOVectors, take up 512B of stack, can send up to 128KB
+        private const int MaxIOVectorSendLength = 32;
+        // 32 IOVectors, take up 512B of stack, can receive up to 128KB
+        private const int MaxIOVectorReceiveLength = 32;
+        private const int MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
         // Highest bit set in EPollData for writable poll
@@ -36,11 +40,15 @@ namespace Tmds.Kestrel.Linux
         private static PipeOptions s_outputPipeOptions = new PipeOptions()
         {
             // Buffer as much as we can send in a single system call
-            MaximumSizeHigh = MaxIOVectorLength * MaxPooledBlockLength,
-            MaximumSizeLow = MaxIOVectorLength * MaxPooledBlockLength,
+            MaximumSizeHigh = MaxSendLength,
+            MaximumSizeLow = MaxSendLength,
             WriterScheduler = InlineScheduler.Default,
             ReaderScheduler = InlineScheduler.Default,
         };
+        unsafe struct ReceiveBuffer
+        {
+            public fixed long IOVectors[2 * MaxIOVectorReceiveLength];
+        }
 
         enum State
         {
@@ -66,9 +74,12 @@ namespace Tmds.Kestrel.Linux
         private Thread _thread;
         private TaskCompletionSource<object> _stateChangeCompletion;
         private bool _deferAccept;
-        private ReadStrategy _readStrategy;
         private bool _coalesceWrites;
         private int _cpuId;
+        private unsafe IOVector* _receiveIoVectors;
+        private OwnedBuffer<byte>[] _receivePool;
+        private PipeFactory _pipeFactory;
+        private MemoryPool _bufferPool;
 
         public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int cpuId)
         {
@@ -78,7 +89,6 @@ namespace Tmds.Kestrel.Linux
             }
             _connectionHandler = connectionHandler;
             _deferAccept = options.DeferAccept;
-            _readStrategy = options.ReadStrategy;
             _coalesceWrites = options.CoalesceWrites;
             _cpuId = cpuId;
         }
@@ -284,6 +294,12 @@ namespace Tmds.Kestrel.Linux
             {
                 var result = Scheduler.TrySetCurrentThreadAffinity(_cpuId);
             }
+
+            _bufferPool = new MemoryPool();
+            _pipeFactory = new PipeFactory(_bufferPool);
+            ReceiveBuffer receiveBuffer = default(ReceiveBuffer);
+            _receiveIoVectors = (IOVector*)receiveBuffer.IOVectors;
+            _receivePool = new OwnedBuffer<byte>[MaxIOVectorSendLength];
             // TODO: add try catch
             bool notPacked = !EPoll.PackedEvents;
             var buffer = stackalloc int[EventBufferLength * (notPacked ? 4 : 3)];
@@ -393,6 +409,7 @@ namespace Tmds.Kestrel.Linux
                 }
 
                 var connectionContext = _connectionHandler.OnConnection(
+                        _pipeFactory,
                         connectionInfo: tsocket,
                         inputOptions: s_inputPipeOptions,
                         outputOptions: s_outputPipeOptions);
@@ -403,14 +420,7 @@ namespace Tmds.Kestrel.Linux
 
                 WriteToSocket(tsocket, connectionContext.Output);
                 bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
-                if (_readStrategy == ReadStrategy.Fixed)
-                {
-                    ReadFromSocketFixed(tsocket, connectionContext.Input, dataMayBeAvailable);
-                }
-                else // ReadStrategy.Available
-                {
-                    ReadFromSocketAvailable(tsocket, connectionContext.Input, dataMayBeAvailable);
-                }
+                ReadFromSocket(tsocket, connectionContext.Input, dataMayBeAvailable);
             }
         }
 
@@ -495,7 +505,7 @@ namespace Tmds.Kestrel.Linux
                     continue;
                 }
                 ioVectorLength++;
-                if (ioVectorLength == MaxIOVectorLength)
+                if (ioVectorLength == MaxIOVectorSendLength)
                 {
                     // No more room in the IOVector
                     break;
@@ -559,50 +569,6 @@ namespace Tmds.Kestrel.Linux
             return tsocket.WritableAwaitable;
         }
 
-        private async void ReadFromSocketAvailable(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
-        {
-            // await Readable(tsocket) will yield to the PollThread
-            try
-            {
-                var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
-                if (availableBytes == 0
-                 && await Readable(tsocket)) // Readable
-                {
-                    availableBytes = tsocket.Socket.GetAvailableBytes();
-                }
-                while (availableBytes != 0)
-                {
-                    var buffer = writer.Alloc(2048);
-                    try
-                    {
-                        Receive(tsocket.Socket, availableBytes, ref buffer);
-                        availableBytes = 0;
-                        var flushResult = await buffer.FlushAsync();
-                        if (!flushResult.IsCompleted // Reader hasn't stopped
-                         && !flushResult.IsCancelled // TransportThread hasn't stopped
-                         && await Readable(tsocket)) // Readable
-                        {
-                            availableBytes = tsocket.Socket.GetAvailableBytes();
-                        }
-                    }
-                    catch
-                    {
-                        buffer.Commit();
-                        throw;
-                    }
-                }
-                writer.Complete();
-            }
-            catch (Exception ex)
-            {
-                writer.Complete(ex);
-            }
-            finally
-            {
-                CleanupSocket(tsocket, SocketShutdown.Receive);
-            }
-        }
-
         private static void RegisterForReadable(TSocket tsocket, EPoll epoll)
         {
             try
@@ -623,9 +589,9 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        private async void ReadFromSocketFixed(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
+        private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
-            // await Readable(tsocket) will yield to the PollThread
+            // Start on PollThread
             try
             {
                 bool eof = false;
@@ -643,7 +609,6 @@ namespace Tmds.Kestrel.Linux
                         {
                             if (result.Value != 0)
                             {
-                                buffer.Advance(result.Value);
                                 var flushResult = await buffer.FlushAsync();
                                 eof = flushResult.IsCompleted || flushResult.IsCancelled;
                             }
@@ -669,6 +634,8 @@ namespace Tmds.Kestrel.Linux
                     }
                     if (!eof)
                     {
+                        // FlushAsync may put us on a differen thread,
+                        // so we always call await Readable to ensure we TryReceive on the PollThread.
                         eof = !await Readable(tsocket);
                     }
                 }
@@ -686,103 +653,39 @@ namespace Tmds.Kestrel.Linux
 
         private unsafe PosixResult TryReceive(Socket socket, ref WritableBuffer wb)
         {
-            IOVector ioVector;
-            wb.Ensure(2048);
-            var memory = wb.Buffer;
-            var length = wb.Buffer.Length;
-            void* pointer;
-            wb.Buffer.TryGetPointer(out pointer);
-            ioVector.Base = pointer;
-            ioVector.Count = (void*)length;
-            return socket.TryReceive(&ioVector, 1);
-        }
+            // All receives execute on PollThread, so it's safe to share the receive pool.
 
-        private unsafe void Receive(Socket socket, int availableBytes, ref WritableBuffer wb)
-        {
-            // WritableBuffer doesn't support non-contiguous writes	
-            // https://github.com/dotnet/corefxlab/issues/1233
-            // We do it anyhow, but we need to make sure we fill every Memory we allocate.
-
-            int ioVectorLength = availableBytes <= wb.Buffer.Length ? 1 :
-                    Math.Min(1 + (availableBytes - wb.Buffer.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorLength);
-            var ioVectors = stackalloc IOVector[ioVectorLength];
-
-            var allocated = 0;
-            var advanced = 0;
-            int ioVectorsUsed = 0;
-            for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
+            // Refill pool
+            for (int i = 0; (i < MaxIOVectorReceiveLength && _receivePool[i] == null); i++)
             {
-                wb.Ensure(1);
-                var memory = wb.Buffer;
-                var length = memory.Length;
+                OwnedBuffer<byte> buffer = _bufferPool.Rent(1);
+                _receivePool[i] = buffer;
                 void* pointer;
-                wb.Buffer.TryGetPointer(out pointer);
-
-                ioVectors[ioVectorsUsed].Base = pointer;
-                ioVectors[ioVectorsUsed].Count = (void*)length;
-                allocated += length;
-
-                if (allocated >= availableBytes)
-                {
-                    // Every Memory (except the last one) must be filled completely.
-                    ioVectorsUsed++;
-                    break;
-                }
-
-                wb.Advance(length);
-                advanced += length;
+                buffer.Buffer.TryGetPointer(out pointer); // this always returns true (MemoryPool is pinned)
+                _receiveIoVectors[i].Base = pointer;
+                _receiveIoVectors[i].Count = (void*)buffer.Length;
             }
-            var expectedMin = Math.Min(availableBytes, allocated);
 
-            // Ideally we get availableBytes in a single receive
-            // but we are happy if we get at least a part of it
-            // and we are willing to take {MaxEAgainCount} EAGAINs.
-            // Less data could be returned due to these reasons:
-            // * TCP URG
-            // * packet was not placed in receive queue (race with FIONREAD)
-            // * ?
-            const int MaxEAgainCount = 10;
-            var eAgainCount = 0;
-            var received = 0;
-            do
+            // Receive
+            var result = socket.TryReceive(_receiveIoVectors, MaxIOVectorReceiveLength);
+
+            // Add filled buffers to pipe
+            int length = result.Value;
+            int usedIdx = 0;
+            while (length > 0)
             {
-                var result = socket.TryReceive(ioVectors, ioVectorsUsed);
-                if (result.IsSuccess)
-                {
-                    received += result.Value;
-                    if (received >= expectedMin)
-                    {
-                        // We made it!
-                        wb.Advance(received - advanced);
-                        return;
-                    }
-                    eAgainCount = 0;
-                    // Update ioVectors to match bytes read
-                    var skip = result.Value;
-                    for (int i = 0; (i < ioVectorsUsed) && (skip > 0); i++)
-                    {
-                        var length = (int)ioVectors[i].Count;
-                        var skipped = Math.Min(skip, length);
-                        ioVectors[i].Count = (void*)(length - skipped);
-                        ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
-                        skip -= skipped;
-                    }
-                }
-                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
-                {
-                    eAgainCount++;
-                    if (eAgainCount == MaxEAgainCount)
-                    {
-                        throw new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
-                    }
-                }
-                else
-                {
-                    result.ThrowOnError();
-                }
-            } while (true);
+                int bufferLength = (int)_receiveIoVectors[usedIdx].Count;
+                var buffer = _receivePool[usedIdx];
+                bufferLength = Math.Min(bufferLength, length);
+                wb.Append(ReadableBuffer.Create(buffer, 0, bufferLength));
+                _receivePool[usedIdx] = null;
+                length -= bufferLength;
+                usedIdx++;
+            }
+            return result;
         }
 
+        // Readable is 'rigged' to always return asynchronous
         private ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket, _epoll);
 
         private void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
@@ -849,6 +752,12 @@ namespace Tmds.Kestrel.Linux
             }
 
             _pipeEnds.Dispose();
+
+            foreach (var buffer in _receivePool)
+            {
+                buffer?.Dispose();
+            }
+            _pipeFactory.Dispose(); // also disposes _bufferPool
 
             TaskCompletionSource<object> tcs;
             lock (_gate)

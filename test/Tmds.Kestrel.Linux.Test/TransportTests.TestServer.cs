@@ -13,7 +13,6 @@ namespace Tests
     {
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
-        public ReadStrategy ReadStrategy { get; set; } = ReadStrategy.Available;
         public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
     }
 
@@ -33,7 +32,6 @@ namespace Tests
             public IPipeReader Output { get; }
         }
 
-        private PipeFactory _pipeFactory;
         private Transport _transport;
         private IPEndPoint _serverAddress;
         private TestServerConnectionHandler _connectionHandler;
@@ -42,13 +40,11 @@ namespace Tests
         {
             options = options ?? new TestServerOptions();
             _connectionHandler = options.ConnectionHandler;
-            _pipeFactory = new PipeFactory();
             _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
             var transportOptions = new TransportOptions()
             {
                 ThreadCount = options.ThreadCount,
-                DeferAccept = options.DeferAccept,
-                ReadStrategy = options.ReadStrategy
+                DeferAccept = options.DeferAccept
             };
             _transport = new Transport(new IPEndPoint[] { _serverAddress }, this, transportOptions);
         }
@@ -72,10 +68,10 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public IConnectionContext OnConnection(IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions)
+        public IConnectionContext OnConnection(PipeFactory factory, IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions)
         {
-            var input = _pipeFactory.Create(inputOptions);
-            var output = _pipeFactory.Create(outputOptions);
+            var input = factory.Create(inputOptions);
+            var output = factory.Create(outputOptions);
 
             _connectionHandler(input.Reader, output.Writer);
 
@@ -106,6 +102,8 @@ namespace Tests
                 await response.FlushAsync();
                 input.Advance(request.End);
             }
+            input.Complete();
+            output.Complete();
         }
 
         public Socket ConnectTo()

@@ -10,15 +10,12 @@ namespace Tests
 {
     public class TransportTests
     {
-        [InlineData(ReadStrategy.Available, true)]
-        [InlineData(ReadStrategy.Available, false)]
-        [InlineData(ReadStrategy.Fixed, true)]
-        [InlineData(ReadStrategy.Fixed, false)]
+        [InlineData(true)]
+        [InlineData(false)]
         [Theory]
-        public async Task Echo(ReadStrategy readStrategy, bool deferAccept)
+        public async Task Echo(bool deferAccept)
         {
-            using (var testServer = new TestServer(new TestServerOptions() { DeferAccept = deferAccept,
-                                                                             ReadStrategy = readStrategy }))
+            using (var testServer = new TestServer(new TestServerOptions() { DeferAccept = deferAccept }))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -58,12 +55,10 @@ namespace Tests
             }
         }
 
-        [InlineData(ReadStrategy.Fixed)]
-        [InlineData(ReadStrategy.Available)]
         [Theory]
-        public async Task StopDisconnectsClient(ReadStrategy readStrategy)
+        public async Task StopDisconnectsClient()
         {
-            using (var testServer = new TestServer(new TestServerOptions() { ReadStrategy = readStrategy }))
+            using (var testServer = new TestServer())
             {
                 await testServer.BindAsync();
 
@@ -146,10 +141,8 @@ namespace Tests
             }
         }
 
-        [InlineData(ReadStrategy.Fixed)]
-        [InlineData(ReadStrategy.Available)]
-        [Theory]
-        public async Task Receive(ReadStrategy readStrategy)
+        [Fact]
+        public async Task Receive()
         {
             // client send 1M bytes which are an int counter
             // server receives and checkes the counting
@@ -175,8 +168,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(new TestServerOptions() { ConnectionHandler = connectionHandler,
-                                                                             ReadStrategy = readStrategy}))
+            using (var testServer = new TestServer(new TestServerOptions() { ConnectionHandler = connectionHandler}))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())

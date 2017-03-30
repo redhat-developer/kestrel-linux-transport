@@ -21,17 +21,13 @@ namespace ConsoleApplication
             public IPipeReader Output { get; }
         }
 
-        private PipeFactory _pipeFactory;
         public HttpServer()
-        {
-            _pipeFactory = new PipeFactory();
-        }
-
+        {}
         
-        public IConnectionContext OnConnection(IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions)
+        public IConnectionContext OnConnection(PipeFactory factory, IConnectionInformation connectionInfo, PipeOptions inputOptions, PipeOptions outputOptions)
         {
-            var input = _pipeFactory.Create(inputOptions);
-            var output = _pipeFactory.Create(outputOptions);
+            var input = factory.Create(inputOptions);
+            var output = factory.Create(outputOptions);
 
             HandleConnection(input.Reader, output.Writer);
 
