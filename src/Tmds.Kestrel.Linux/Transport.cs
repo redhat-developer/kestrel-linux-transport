@@ -47,7 +47,7 @@ namespace Tmds.Kestrel.Linux
             _transportOptions = transportOptions;
         }
 
-        public Task BindAsync()
+        public async Task BindAsync()
         {
             var threads = CreateTransportThreads();
             var original = Interlocked.CompareExchange(ref _threads, threads, null);
@@ -59,15 +59,27 @@ namespace Tmds.Kestrel.Linux
                 throw new InvalidOperationException("Already bound");
             }
 
+            var tasks = new Task[threads.Length];
             for (int i = 0; i < threads.Length; i++)
             {
-                threads[i].Start();
-                foreach (var listenEndPoint in endPoints)
+                tasks[i] = threads[i].StartAsync();
+            }
+            try
+            {
+                await Task.WhenAll(tasks);
+                for (int i = 0; i < threads.Length; i++)
                 {
-                    threads[i].AcceptOn(listenEndPoint);
+                    foreach (var listenEndPoint in endPoints)
+                    {
+                        threads[i].AcceptOn(listenEndPoint);
+                    }
                 }
             }
-            return Task.CompletedTask;
+            catch
+            {
+                await StopAsync();
+                throw;
+            }
         }
 
         private TransportThread[] CreateTransportThreads()

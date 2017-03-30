@@ -11,6 +11,10 @@
 #include <string.h>
 #include <fcntl.h>
 
+#ifndef SO_INCOMING_CPU
+#define SO_INCOMING_CPU 49
+#endif
+
 struct PalSocketAddress
 {
     int16_t Family;
@@ -171,6 +175,7 @@ enum SocketOptionName : int32_t
 
     // corefx controls this together with PAL_SO_REUSEADDR
     PAL_SO_REUSEPORT = 0x2001,
+    PAL_SO_INCOMING_CPU = 0x2002,
     
     // PAL_SO_MAXCONN = 0x7fffffff,
 
@@ -425,6 +430,10 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionName, int32_t socketO
                 // case PAL_SO_MAXCONN:
                 case PAL_SO_REUSEPORT:
                     optName = SO_REUSEPORT;
+                    return true;
+
+                case PAL_SO_INCOMING_CPU:
+                    optName = SO_INCOMING_CPU;
                     return true;
 
                 default:

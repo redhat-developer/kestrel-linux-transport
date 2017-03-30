@@ -53,6 +53,7 @@ namespace Tmds.Kestrel.Linux
         enum State
         {
             Initial,
+            Starting,
             Started,
             ClosingAccept,
             AcceptClosed,
@@ -76,6 +77,7 @@ namespace Tmds.Kestrel.Linux
         private bool _deferAccept;
         private bool _coalesceWrites;
         private int _cpuId;
+        private bool _receiveOnIncomingCpu;
         private unsafe IOVector* _receiveIoVectors;
         private OwnedBuffer<byte>[] _receivePool;
         private PipeFactory _pipeFactory;
@@ -91,13 +93,23 @@ namespace Tmds.Kestrel.Linux
             _deferAccept = options.DeferAccept;
             _coalesceWrites = options.CoalesceWrites;
             _cpuId = cpuId;
+            _receiveOnIncomingCpu = options.ReceiveOnIncomingCpu;
         }
 
-        public void Start()
+        public Task StartAsync()
         {
+            TaskCompletionSource<object> tcs;
             lock (_gate)
             {
-                if (_state != State.Initial)
+                if (_state == State.Started)
+                {
+                    return Task.CompletedTask;
+                }
+                else if (_state == State.Starting)
+                {
+                    return _stateChangeCompletion.Task;
+                }
+                else if (_state != State.Initial)
                 {
                     ThrowInvalidState();
                 }
@@ -121,8 +133,9 @@ namespace Tmds.Kestrel.Linux
                     _sockets.TryAdd(tsocket.Key, tsocket);
                     _epoll.Control(EPollOperation.Add, _pipeEnds.ReadEnd, EPollEvents.Readable, new EPollData { Int1 = tsocket.Key, Int2 = tsocket.Key });
 
-                    _state = State.Started;
-   
+                    tcs = _stateChangeCompletion = new TaskCompletionSource<object>();
+                    _state = State.Starting;
+
                     _thread = new Thread(PollThread);
                     _thread.Start();
                 }
@@ -134,6 +147,7 @@ namespace Tmds.Kestrel.Linux
                     throw;
                 }
             }
+            return tcs.Task;
         }
 
         public void AcceptOn(System.Net.IPEndPoint endPoint)
@@ -158,6 +172,20 @@ namespace Tmds.Kestrel.Linux
                     {
                         // Don't do mapped ipv4
                         acceptSocket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.IPv6Only, 1);
+                    }
+                    if (_receiveOnIncomingCpu)
+                    {
+                        if (_cpuId != -1)
+                        {
+                            if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, _cpuId))
+                            {
+                                // TODO: log
+                            }
+                        }
+                        else
+                        {
+                            // TODO: log
+                        }
                     }
                     // Linux: allow bind during linger time
                     acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
@@ -210,34 +238,64 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        public Task CloseAcceptAsync()
+        public async Task CloseAcceptAsync()
         {
-            TaskCompletionSource<object> tcs;
+            TaskCompletionSource<object> tcs = null;
             lock (_gate)
             {
                 if (_state == State.Initial)
                 {
                     _state = State.Stopped;
-                    return Task.CompletedTask;
+                    return;
                 }
                 else if (_state == State.AcceptClosed || _state == State.Stopping || _state == State.Stopped)
                 {
-                    return Task.CompletedTask;
+                    return;
                 }
                 else if (_state == State.ClosingAccept)
                 {
-                    return _stateChangeCompletion.Task;
+                    tcs = _stateChangeCompletion;
                 }
-                else if (_state != State.Started)
+            }
+            if (tcs != null)
+            {
+                await tcs.Task;
+                return;
+            }
+            try
+            {
+                await StartAsync();
+            }
+            catch
+            {}
+            bool triggerStateChange = false;
+            lock (_gate)
+            {
+                if (_state == State.AcceptClosed || _state == State.Stopping || _state == State.Stopped)
+                {
+                    return;
+                }
+                else if (_state == State.ClosingAccept)
+                {
+                    tcs = _stateChangeCompletion;
+                }
+                else if (_state == State.Started)
+                {
+                    triggerStateChange = true;
+                    tcs = _stateChangeCompletion = new TaskCompletionSource<object>();
+                    _state = State.ClosingAccept;
+                }
+                else
                 {
                     // Cannot happen
                     ThrowInvalidState();
                 }
-                tcs = _stateChangeCompletion = new TaskCompletionSource<object>();
-                _state = State.ClosingAccept;
             }
-            _pipeEnds.WriteEnd.WriteByte(PipeStateChange);
-            return tcs.Task;
+            if (triggerStateChange)
+            {
+                _pipeEnds.WriteEnd.WriteByte(PipeStateChange);
+            }
+            await tcs.Task;
         }
 
         public async Task StopAsync()
@@ -292,15 +350,22 @@ namespace Tmds.Kestrel.Linux
         {
             if (_cpuId != -1)
             {
-                var result = Scheduler.TrySetCurrentThreadAffinity(_cpuId);
+                if (!Scheduler.TrySetCurrentThreadAffinity(_cpuId))
+                {
+                    // TODO: log
+                    _cpuId = -1;
+                }
             }
+
+            CompleteStateChange(State.Started);
 
             _bufferPool = new MemoryPool();
             _pipeFactory = new PipeFactory(_bufferPool);
+
             ReceiveBuffer receiveBuffer = default(ReceiveBuffer);
             _receiveIoVectors = (IOVector*)receiveBuffer.IOVectors;
             _receivePool = new OwnedBuffer<byte>[MaxIOVectorSendLength];
-            // TODO: add try catch
+
             bool notPacked = !EPoll.PackedEvents;
             var buffer = stackalloc int[EventBufferLength * (notPacked ? 4 : 3)];
             bool running = true;
@@ -759,14 +824,7 @@ namespace Tmds.Kestrel.Linux
             }
             _pipeFactory.Dispose(); // also disposes _bufferPool
 
-            TaskCompletionSource<object> tcs;
-            lock (_gate)
-            {
-                tcs = _stateChangeCompletion;
-                _stateChangeCompletion = null;
-                _state = State.Stopped;
-            }
-            tcs.SetResult(null);
+            CompleteStateChange(State.Stopped);
         }
 
         private void CloseAccept()
@@ -779,14 +837,7 @@ namespace Tmds.Kestrel.Linux
                 acceptSocket.Socket.Dispose(); // will close (no concurrent users)
             }
             _acceptSockets.Clear();
-            TaskCompletionSource<object> tcs;
-            lock (_gate)
-            {
-                tcs = _stateChangeCompletion;
-                _stateChangeCompletion = null;
-                _state = State.AcceptClosed;
-            }
-            tcs.SetResult(null);
+            CompleteStateChange(State.AcceptClosed);
         }
 
         private unsafe void HandleState(ref bool running, ref bool doCloseAccept)
@@ -807,6 +858,18 @@ namespace Tmds.Kestrel.Linux
         private void ThrowInvalidState()
         {
             throw new InvalidOperationException($"nameof(TransportThread) is {_state}");
+        }
+
+        private void CompleteStateChange(State state)
+        {
+            TaskCompletionSource<object> tcs;
+            lock (_gate)
+            {
+                tcs = _stateChangeCompletion;
+                _stateChangeCompletion = null;
+                _state = state;
+            }
+            tcs.SetResult(null);
         }
     }
 }

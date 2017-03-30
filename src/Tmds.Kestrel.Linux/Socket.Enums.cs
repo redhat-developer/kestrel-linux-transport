@@ -119,6 +119,8 @@ namespace Tmds.Kestrel.Linux
         // Maximum queue length that can be specified by <see cref='System.Net.Sockets.Socket.Listen'/>.
         //MaxConnections = 0x7fffffff,
         ReusePort = 0x2001,
+
+        IncomingCpu = 0x2002,
         #endregion
 
         // The following values are taken from ws2tcpip.h,
