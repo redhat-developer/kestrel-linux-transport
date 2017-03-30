@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,7 +13,6 @@ namespace Tmds.Kestrel.Linux
         private static readonly TransportThread[] EmptyThreads = Array.Empty<TransportThread>();
         private IPEndPoint[] _listenEndPoints;
         private IConnectionHandler _connectionHandler;
-        private int _threadCount;
         private TransportThread[] _threads;
         private TransportOptions _transportOptions;
 
@@ -44,17 +45,11 @@ namespace Tmds.Kestrel.Linux
             _listenEndPoints = listenEndPoints;
             _connectionHandler = connectionHandler;
             _transportOptions = transportOptions;
-            _threadCount = _transportOptions.ThreadCount;
         }
 
         public Task BindAsync()
         {
-            var threads = new TransportThread[_threadCount];
-            for (int i = 0; i < _threadCount; i++)
-            {
-                var thread = new TransportThread(_connectionHandler, _transportOptions);
-                threads[i] = thread;
-            }
+            var threads = CreateTransportThreads();
             var original = Interlocked.CompareExchange(ref _threads, threads, null);
             ThrowIfInvalidState(state: original, starting: true);
 
@@ -73,6 +68,55 @@ namespace Tmds.Kestrel.Linux
                 }
             }
             return Task.CompletedTask;
+        }
+
+        private TransportThread[] CreateTransportThreads()
+        {
+            var threads = new TransportThread[_transportOptions.ThreadCount];
+            List<int> preferredCpuIds = null;
+            if (_transportOptions.SetThreadAffinity)
+            {
+                preferredCpuIds = GetPreferredCpuIds();
+            }
+            int cpuIdx = 0;
+            for (int i = 0; i < _transportOptions.ThreadCount; i++)
+            {
+                int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
+                var thread = new TransportThread(_connectionHandler, _transportOptions, cpuId);
+                threads[i] = thread;
+            }
+            return threads;
+        }
+
+        private List<int> GetPreferredCpuIds()
+        {
+            var ids = new List<int>();
+            bool found = true;
+            int level = 0;
+            do
+            {
+                found = false;
+                foreach (var socket in CpuInfo.GetSockets())
+                {
+                    var cores = CpuInfo.GetCores(socket);
+                    foreach (var core in cores)
+                    {
+                        var cpuIdIterator = CpuInfo.GetCpuIds(socket, core).GetEnumerator();
+                        int d = 0;
+                        while (cpuIdIterator.MoveNext())
+                        {
+                            if (d++ == level)
+                            {
+                                ids.Add(cpuIdIterator.Current);
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                level++;
+            } while (found && ids.Count < _transportOptions.ThreadCount);
+            return ids;
         }
 
         public Task UnbindAsync()

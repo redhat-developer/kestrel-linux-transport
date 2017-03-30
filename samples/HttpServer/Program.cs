@@ -24,10 +24,9 @@ namespace ConsoleApplication
             }
 
             var endpoint = new IPEndPoint(address, port);
-            var transport = new Transport(new[] { endpoint }, new HttpServer(), new TransportOptions() {
-                ThreadCount = Environment.ProcessorCount
-
-            } );
+            var transport = new Transport(new[] { endpoint },
+                                          new HttpServer(),
+                                          new TransportOptions() {} );
             await transport.BindAsync();
             Console.WriteLine($"Listening on {endpoint}.");
             Console.WriteLine("Press any key to stop the server.");

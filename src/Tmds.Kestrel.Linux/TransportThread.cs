@@ -68,8 +68,9 @@ namespace Tmds.Kestrel.Linux
         private bool _deferAccept;
         private ReadStrategy _readStrategy;
         private bool _coalesceWrites;
+        private int _cpuId;
 
-        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options)
+        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int cpuId)
         {
             if (connectionHandler == null)
             {
@@ -79,6 +80,7 @@ namespace Tmds.Kestrel.Linux
             _deferAccept = options.DeferAccept;
             _readStrategy = options.ReadStrategy;
             _coalesceWrites = options.CoalesceWrites;
+            _cpuId = cpuId;
         }
 
         public void Start()
@@ -278,6 +280,10 @@ namespace Tmds.Kestrel.Linux
 
         private unsafe void PollThread(object obj)
         {
+            if (_cpuId != -1)
+            {
+                var result = Scheduler.TrySetCurrentThreadAffinity(_cpuId);
+            }
             // TODO: add try catch
             bool notPacked = !EPoll.PackedEvents;
             var buffer = stackalloc int[EventBufferLength * (notPacked ? 4 : 3)];

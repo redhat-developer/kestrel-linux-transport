@@ -4,6 +4,7 @@ set(SOURCES
     pipeend.cpp
     epoll.cpp
     socket.cpp
+    scheduler.cpp
 )
 
 add_library(Tmds.Kestrel.Linux.Native
