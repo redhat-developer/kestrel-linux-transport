@@ -555,6 +555,7 @@ namespace Tmds.Kestrel.Linux
 
         private async void ReadFromSocketAvailable(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
+            // await Readable(tsocket) will yield to the PollThread
             try
             {
                 var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
@@ -596,8 +597,29 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
+        private static void RegisterForReadable(TSocket tsocket, EPoll epoll)
+        {
+            try
+            {
+                bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
+                if (!registered)
+                {
+                    tsocket.AddFlags(SocketFlags.EPollRegistered);
+                }
+                epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
+                    tsocket.Socket,
+                    EPollEvents.Readable | EPollEvents.OneShot,
+                    new EPollData{ Int1 = tsocket.Key, Int2 = tsocket.Key });
+            }
+            catch (System.Exception)
+            {
+                tsocket.CompleteReadable(stopping: true);
+            }
+        }
+
         private async void ReadFromSocketFixed(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
+            // await Readable(tsocket) will yield to the PollThread
             try
             {
                 bool eof = false;
@@ -755,20 +777,7 @@ namespace Tmds.Kestrel.Linux
             } while (true);
         }
 
-        private ReadableAwaitable Readable(TSocket tsocket)
-        {
-            tsocket.ResetReadableAwaitable();
-            bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
-            if (!registered)
-            {
-                tsocket.AddFlags(SocketFlags.EPollRegistered);
-            }
-            _epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
-                            tsocket.Socket,
-                            EPollEvents.Readable | EPollEvents.OneShot,
-                            new EPollData{ Int1 = tsocket.Key, Int2 = tsocket.Key });
-            return tsocket.ReadableAwaitable;
-        }
+        private ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket, _epoll);
 
         private void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
         {
