@@ -2,6 +2,8 @@ using System;
 using System.IO.Pipelines;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using Microsoft.AspNetCore.Server.Kestrel.Transport;
 using Tmds.Kestrel.Linux;
 
@@ -50,7 +52,8 @@ namespace Tests
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept
             };
-            _transport = new Transport(new IPEndPoint[] { _serverAddress }, this, transportOptions);
+            var logger = new ConsoleLogger(nameof(TestServer), (n, l) => false, includeScopes: false);
+            _transport = new Transport(new IPEndPoint[] { _serverAddress }, this, transportOptions, logger);
         }
 
         public TestServer(TestServerConnectionHandler connectionHandler) :

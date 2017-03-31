@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel;
 using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.Extensions.Logging;
 
 namespace Tmds.Kestrel.Linux
 {
@@ -17,9 +18,10 @@ namespace Tmds.Kestrel.Linux
         private IConnectionHandler _connectionHandler;
         private TransportThread[] _threads;
         private TransportOptions _transportOptions;
+        private ILogger _logger;
 
-        public Transport(ListenOptions listenOptions, IConnectionHandler connectionHandler, TransportOptions transportOptions) :
-            this(CreateEndPointsFromListenOptions(listenOptions), connectionHandler, transportOptions)
+        public Transport(ListenOptions listenOptions, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger) :
+            this(CreateEndPointsFromListenOptions(listenOptions), connectionHandler, transportOptions, logger)
         {
             _listenOptions = listenOptions;
         }
@@ -42,7 +44,7 @@ namespace Tmds.Kestrel.Linux
             return new IPEndPoint[1] { listenOptions.IPEndPoint };
         }
 
-        public Transport(IPEndPoint[] listenEndPoints, IConnectionHandler connectionHandler, TransportOptions transportOptions)
+        public Transport(IPEndPoint[] listenEndPoints, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger)
         {
             if (listenEndPoints == null)
             {
@@ -55,6 +57,10 @@ namespace Tmds.Kestrel.Linux
             if (transportOptions == null)
             {
                 throw new ArgumentException(nameof(transportOptions));
+            }
+            if (logger == null)
+            {
+                throw new ArgumentException(nameof(logger));
             }
             if (listenEndPoints.Length < 1)
             {
@@ -71,6 +77,7 @@ namespace Tmds.Kestrel.Linux
             _listenEndPoints = listenEndPoints;
             _connectionHandler = connectionHandler;
             _transportOptions = transportOptions;
+            _logger = logger;
         }
 
         public async Task BindAsync()
@@ -84,6 +91,7 @@ namespace Tmds.Kestrel.Linux
             {
                 throw new InvalidOperationException("Already bound");
             }
+            _logger.LogInformation($@"BindAsync TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept} CW:{_transportOptions.CoalesceWrites}");
 
             var tasks = new Task[threads.Length];
             for (int i = 0; i < threads.Length; i++)
@@ -108,6 +116,8 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
+        private static int s_threadId = 0;
+
         private TransportThread[] CreateTransportThreads()
         {
             var threads = new TransportThread[_transportOptions.ThreadCount];
@@ -120,7 +130,8 @@ namespace Tmds.Kestrel.Linux
             for (int i = 0; i < _transportOptions.ThreadCount; i++)
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
-                var thread = new TransportThread(_connectionHandler, _transportOptions, cpuId, _listenOptions);
+                int threadId = Interlocked.Increment(ref s_threadId);
+                var thread = new TransportThread(_connectionHandler, _transportOptions, threadId, cpuId, _listenOptions, _logger);
                 threads[i] = thread;
             }
             return threads;

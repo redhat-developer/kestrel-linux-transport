@@ -22,8 +22,8 @@
         "System.Text.Formatting": "0.1.0-*",
         "System.Buffers.Primitives": "0.1.0-*",
         "System.Text.Primitives": "0.1.0-*",
-        "System.Text.Http": "0.1.0-*"
-
+        "System.Text.Http": "0.1.0-*",
+        "Microsoft.Extensions.Logging.Console": "1.1.1"
       },
       "imports": "dnxcore50"
     }

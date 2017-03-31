@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using Tmds.Kestrel.Linux;
 
 namespace ConsoleApplication
@@ -22,11 +24,12 @@ namespace ConsoleApplication
                 address = IPAddress.Parse(split[0]);
                 port = int.Parse(split[1]);
             }
-
+            var logger = new ConsoleLogger("Transport", (n, l) => l >= LogLevel.Information, includeScopes: false);
             var endpoint = new IPEndPoint(address, port);
             var transport = new Transport(new[] { endpoint },
                                           new HttpServer(),
-                                          new TransportOptions() {} );
+                                          new TransportOptions() {},
+                                          logger);
             await transport.BindAsync();
             Console.WriteLine($"Listening on {endpoint}.");
             Console.WriteLine("Press any key to stop the server.");

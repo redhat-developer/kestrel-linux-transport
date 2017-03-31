@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel;
 using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.Extensions.Logging;
 using Tmds.Posix;
 
 namespace Tmds.Kestrel.Linux
@@ -58,6 +59,7 @@ namespace Tmds.Kestrel.Linux
         private TaskCompletionSource<object> _stateChangeCompletion;
         private bool _deferAccept;
         private bool _coalesceWrites;
+        private int _threadId;
         private int _cpuId;
         private bool _receiveOnIncomingCpu;
         private unsafe IOVector* _receiveIoVectors;
@@ -65,8 +67,9 @@ namespace Tmds.Kestrel.Linux
         private PipeFactory _pipeFactory;
         private MemoryPool _bufferPool;
         private ListenOptions _listenOptions;
+        private ILogger _logger;
 
-        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int cpuId, ListenOptions listenOptions)
+        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int threadId, int cpuId, ListenOptions listenOptions, ILogger logger)
         {
             if (connectionHandler == null)
             {
@@ -75,9 +78,11 @@ namespace Tmds.Kestrel.Linux
             _connectionHandler = connectionHandler;
             _deferAccept = options.DeferAccept;
             _coalesceWrites = options.CoalesceWrites;
+            _threadId = threadId;
             _cpuId = cpuId;
             _receiveOnIncomingCpu = options.ReceiveOnIncomingCpu;
             _listenOptions = listenOptions;
+            _logger = logger;
         }
 
         public Task StartAsync()
@@ -163,12 +168,8 @@ namespace Tmds.Kestrel.Linux
                         {
                             if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, _cpuId))
                             {
-                                // TODO: log
+                                _logger.LogWarning($"Thread {_threadId}: Cannot enable nameof{SocketOptionName.IncomingCpu} for {endPoint}");
                             }
-                        }
-                        else
-                        {
-                            // TODO: log
                         }
                     }
                     // Linux: allow bind during linger time
@@ -336,8 +337,12 @@ namespace Tmds.Kestrel.Linux
             {
                 if (!Scheduler.TrySetCurrentThreadAffinity(_cpuId))
                 {
-                    // TODO: log
+                    _logger.LogWarning($"Thread {_threadId}: Failed to set Thread Affinity");
                     _cpuId = -1;
+                }
+                else
+                {
+                    _logger.LogInformation($"Thread {_threadId}: Bound to CPU {_cpuId}");
                 }
             }
 
@@ -352,6 +357,10 @@ namespace Tmds.Kestrel.Linux
 
             bool notPacked = !EPoll.PackedEvents;
             var buffer = stackalloc int[EventBufferLength * (notPacked ? 4 : 3)];
+
+            int statAcceptEvents = 0;
+            int statAccepts = 0;
+
             bool running = true;
             while (running)
             {
@@ -393,7 +402,8 @@ namespace Tmds.Kestrel.Linux
                         }
                         else if (type == SocketFlags.TypeAccept && !doCloseAccept)
                         {
-                            HandleAccept(tsocket);
+                            statAcceptEvents++;
+                            statAccepts += HandleAccept(tsocket);
                         }
                         else // TypePipe
                         {
@@ -411,6 +421,10 @@ namespace Tmds.Kestrel.Linux
                 }
             }
             Stop();
+
+            _logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents}");
+
+            CompleteStateChange(State.Stopped);
         }
 
         private void DoCoalescedWrites()
@@ -425,7 +439,7 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        private void HandleAccept(TSocket tacceptSocket)
+        private int HandleAccept(TSocket tacceptSocket)
         {
             // TODO: should we handle more than 1 accept? If we do, we shouldn't be to eager
             //       as that might give the kernel the impression we have nothing to do
@@ -454,7 +468,7 @@ namespace Tmds.Kestrel.Linux
                 catch
                 {
                     clientSocket.Dispose();
-                    return;
+                    return 0;
                 }
 
                 var connectionContext = _connectionHandler.OnConnection(tsocket);
@@ -466,6 +480,12 @@ namespace Tmds.Kestrel.Linux
                 WriteToSocket(tsocket, connectionContext.Output);
                 bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
                 ReadFromSocket(tsocket, connectionContext.Input, dataMayBeAvailable);
+
+                return 1;
+            }
+            else
+            {
+                return 0;
             }
         }
 
@@ -803,8 +823,6 @@ namespace Tmds.Kestrel.Linux
                 buffer?.Dispose();
             }
             _pipeFactory.Dispose(); // also disposes _bufferPool
-
-            CompleteStateChange(State.Stopped);
         }
 
         private void CloseAccept()
