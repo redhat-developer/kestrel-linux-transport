@@ -36,6 +36,7 @@ namespace Tests
             Task IConnectionContext.StopAsync() { throw new NotSupportedException(); }
             void IConnectionContext.Abort(Exception ex) { throw new NotSupportedException(); }
             void IConnectionContext.Timeout() { throw new NotSupportedException(); }
+            void IConnectionContext.OnConnectionClosed() { throw new NotSupportedException(); }
         }
 
         private Transport _transport;
