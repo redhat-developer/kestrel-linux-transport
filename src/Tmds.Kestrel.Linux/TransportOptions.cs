@@ -4,16 +4,14 @@ namespace Tmds.Kestrel.Linux
     {
         public int ThreadCount { get; set; } = AvailableProcessors;
 
-        public bool SetThreadAffinity { get; set; } = NotConstrained;
+        public bool SetThreadAffinity { get; set; } = false;
 
-        public bool ReceiveOnIncomingCpu { get; set; } = NotConstrained;
+        public bool ReceiveOnIncomingCpu { get; set; } = false;
 
         public bool DeferAccept { get; set; } = true;
 
         public bool CoalesceWrites { get; set; } = true;
 
         private static int AvailableProcessors => Scheduler.GetAvailableCpusForProcess();
-
-        private static bool NotConstrained => Scheduler.GetAvailableCpusForProcess() == CpuInfo.GetAvailableCpus();
     }
 }
