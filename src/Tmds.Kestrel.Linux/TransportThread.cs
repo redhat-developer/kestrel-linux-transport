@@ -28,10 +28,6 @@ namespace Tmds.Kestrel.Linux
         private const int DupKeyMask        = 1 << 31;
         private const byte PipeStateChange  = 0;
         private const byte PipeCoalesce     = 1;
-        unsafe struct ReceiveBuffer
-        {
-            public fixed long IOVectors[2 * MaxIOVectorReceiveLength];
-        }
 
         enum State
         {
