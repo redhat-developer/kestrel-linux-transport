@@ -1,12 +1,11 @@
 using System;
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel;
-using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.Logging;
 using Tmds.Posix;
 
@@ -59,10 +58,9 @@ namespace Tmds.Kestrel.Linux
         private int _cpuId;
         private bool _receiveOnIncomingCpu;
         private PipeFactory _pipeFactory;
-        private ListenOptions _listenOptions;
         private ILogger _logger;
 
-        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int threadId, int cpuId, ListenOptions listenOptions, ILogger logger)
+        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int threadId, int cpuId, ILogger logger)
         {
             if (connectionHandler == null)
             {
@@ -74,7 +72,6 @@ namespace Tmds.Kestrel.Linux
             _threadId = threadId;
             _cpuId = cpuId;
             _receiveOnIncomingCpu = options.ReceiveOnIncomingCpu;
-            _listenOptions = listenOptions;
             _logger = logger;
         }
 

@@ -3,9 +3,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Microsoft.AspNetCore.Server.Kestrel;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.Http;
-using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 
 namespace Tmds.Kestrel.Linux
 {
@@ -152,9 +150,6 @@ namespace Tmds.Kestrel.Linux
             IPEndPoint IConnectionInformation.RemoteEndPoint => PeerAddress;
 
             IPEndPoint IConnectionInformation.LocalEndPoint => LocalAddress;
-
-            // TODO: who is using this?
-            ListenOptions IConnectionInformation.ListenOptions => _thread._listenOptions;
 
             PipeFactory IConnectionInformation.PipeFactory => _thread._pipeFactory;
 

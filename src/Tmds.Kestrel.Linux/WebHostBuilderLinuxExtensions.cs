@@ -1,5 +1,5 @@
 using System;
-using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Tmds.Kestrel.Linux;
 

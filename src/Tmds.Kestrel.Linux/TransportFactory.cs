@@ -1,7 +1,7 @@
 using System;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel;
-using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -25,9 +25,9 @@ namespace Tmds.Kestrel.Linux
             _options = options.Value;
             _logger = loggerFactory.CreateLogger<Transport>();
         }
-        public ITransport Create(ListenOptions listenOptions, IConnectionHandler handler)
+        public ITransport Create(IEndPointInformation IEndPointInformation, IConnectionHandler handler)
         {
-            return new Transport(listenOptions, handler, _options, _logger);
+            return new Transport(IEndPointInformation, handler, _options, _logger);
         }
     }
 }

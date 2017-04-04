@@ -19,7 +19,11 @@
         "Tmds.Posix": "0.1.0-master-linux-*",
         "System.Threading.Thread": "4.3.0",
         "System.IO.Pipelines": "0.1.0-*",
-        "Microsoft.AspNetCore.Server.Kestrel.Core": "1.2.0-*"
+        "Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions": "1.2.0-*",
+        "Microsoft.AspNetCore.Hosting.Abstractions": "1.1.1",
+        "Microsoft.Extensions.Logging": "1.1.1",
+        "Microsoft.Extensions.Options": "1.1.1",
+        "System.Threading.ThreadPool": "4.3.0"
       }
     }
   },

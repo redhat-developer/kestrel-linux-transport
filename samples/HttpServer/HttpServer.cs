@@ -3,7 +3,7 @@ using System.IO.Pipelines;
 using System.Text;
 using System.Text.Formatting;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Tmds.Kestrel.Linux;
 
 namespace ConsoleApplication

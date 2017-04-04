@@ -5,7 +5,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel;
-using Microsoft.AspNetCore.Server.Kestrel.Transport;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Tmds.Kestrel.Linux
@@ -13,35 +13,32 @@ namespace Tmds.Kestrel.Linux
     public class Transport : ITransport
     {
         private static readonly TransportThread[] EmptyThreads = Array.Empty<TransportThread>();
-        private ListenOptions _listenOptions;
         private IPEndPoint[] _listenEndPoints;
         private IConnectionHandler _connectionHandler;
         private TransportThread[] _threads;
         private TransportOptions _transportOptions;
         private ILogger _logger;
 
-        public Transport(ListenOptions listenOptions, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger) :
-            this(CreateEndPointsFromListenOptions(listenOptions), connectionHandler, transportOptions, logger)
-        {
-            _listenOptions = listenOptions;
-        }
+        public Transport(IEndPointInformation IEndPointInformation, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger) :
+            this(CreateEndPointsFromIEndPointInformation(IEndPointInformation), connectionHandler, transportOptions, logger)
+        {}
 
-        private static IPEndPoint[] CreateEndPointsFromListenOptions(ListenOptions listenOptions)
+        private static IPEndPoint[] CreateEndPointsFromIEndPointInformation(IEndPointInformation IEndPointInformation)
         {
-            if (listenOptions == null)
+            if (IEndPointInformation == null)
             {
-                throw new ArgumentNullException(nameof(listenOptions));
+                throw new ArgumentNullException(nameof(IEndPointInformation));
             }
-            if (listenOptions.Type != ListenType.IPEndPoint)
+            if (IEndPointInformation.Type != ListenType.IPEndPoint)
             {
                 throw new NotSupportedException("Only IPEndPoints are supported.");
             }
-            if (listenOptions.IPEndPoint == null)
+            if (IEndPointInformation.IPEndPoint == null)
             {
-                throw new ArgumentNullException(nameof(listenOptions.IPEndPoint));
+                throw new ArgumentNullException(nameof(IEndPointInformation.IPEndPoint));
             }
 
-            return new IPEndPoint[1] { listenOptions.IPEndPoint };
+            return new IPEndPoint[1] { IEndPointInformation.IPEndPoint };
         }
 
         public Transport(IPEndPoint[] listenEndPoints, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger)
@@ -131,7 +128,7 @@ namespace Tmds.Kestrel.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(_connectionHandler, _transportOptions, threadId, cpuId, _listenOptions, _logger);
+                var thread = new TransportThread(_connectionHandler, _transportOptions, threadId, cpuId, _logger);
                 threads[i] = thread;
             }
             return threads;
