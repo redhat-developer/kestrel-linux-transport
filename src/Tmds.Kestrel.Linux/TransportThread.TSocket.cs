@@ -155,7 +155,7 @@ namespace Tmds.Kestrel.Linux
 
             IScheduler IConnectionInformation.InputWriterScheduler => InlineScheduler.Default;
 
-            IScheduler IConnectionInformation.OutputWriterScheduler => InlineScheduler.Default;
+            IScheduler IConnectionInformation.OutputReaderScheduler => _thread;
 
             private static ITimeoutControl _timeoutControl = new UnsupportedTimeoutControl();
             ITimeoutControl IConnectionInformation.TimeoutControl => _timeoutControl;

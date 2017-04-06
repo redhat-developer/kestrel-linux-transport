@@ -54,7 +54,7 @@ namespace Tests
                 DeferAccept = options.DeferAccept
             };
             var logger = new ConsoleLogger(nameof(TestServer), (n, l) => false, includeScopes: false);
-            _transport = new Transport(new IPEndPoint[] { _serverAddress }, this, transportOptions, logger);
+            _transport = new Transport(_serverAddress, this, transportOptions, logger);
         }
 
         public TestServer(TestServerConnectionHandler connectionHandler) :

@@ -26,7 +26,7 @@ namespace ConsoleApplication
             }
             var logger = new ConsoleLogger("Transport", (n, l) => l >= LogLevel.Information, includeScopes: false);
             var endpoint = new IPEndPoint(address, port);
-            var transport = new Transport(new[] { endpoint },
+            var transport = new Transport(endpoint,
                                           new HttpServer(),
                                           new TransportOptions() {},
                                           logger);

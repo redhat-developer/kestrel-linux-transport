@@ -10,8 +10,6 @@ namespace Tmds.Kestrel.Linux
 
         public bool DeferAccept { get; set; } = true;
 
-        public bool CoalesceWrites { get; set; } = true;
-
         private static int AvailableProcessors => Scheduler.GetAvailableCpusForProcess();
     }
 }

@@ -2,16 +2,16 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO.Pipelines;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.Logging;
 using Tmds.Posix;
 
 namespace Tmds.Kestrel.Linux
 {
-    sealed partial class TransportThread
+    sealed partial class TransportThread : IScheduler
     {
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
         // 32 IOVectors, take up 512B of stack, can send up to 128KB
@@ -25,8 +25,16 @@ namespace Tmds.Kestrel.Linux
         // the remaining bits of the EPollData are the key
         // of the _sockets dictionary.
         private const int DupKeyMask        = 1 << 31;
-        private const byte PipeStateChange  = 0;
-        private const byte PipeCoalesce     = 1;
+        private const byte PipeStateChange    = 0;
+        private const byte PipeActionsPending = 1;
+
+        private struct ScheduledAction
+        {
+            public Action Action;
+        }
+        private readonly object _schedulerGate = new object();
+        private Queue<ScheduledAction> _schedulerAdding;
+        private Queue<ScheduledAction> _schedulerRunning;
 
         enum State
         {
@@ -45,22 +53,21 @@ namespace Tmds.Kestrel.Linux
         private readonly object _gate = new object();
         // key is the file descriptor
         private ConcurrentDictionary<int, TSocket> _sockets;
-        private ConcurrentQueue<TSocket> _coalescingWrites;
-        private int _coalesceWritesOnNextPoll;
         private List<TSocket> _acceptSockets;
         private EPoll _epoll;
         private PipeEndPair _pipeEnds;
         private Thread _thread;
         private TaskCompletionSource<object> _stateChangeCompletion;
         private bool _deferAccept;
-        private bool _coalesceWrites;
         private int _threadId;
         private int _cpuId;
         private bool _receiveOnIncomingCpu;
         private PipeFactory _pipeFactory;
         private ILogger _logger;
+        private IPEndPoint _endPoint;
+        private int _writes;
 
-        public TransportThread(IConnectionHandler connectionHandler, TransportOptions options, int threadId, int cpuId, ILogger logger)
+        public TransportThread(IPEndPoint endPoint, IConnectionHandler connectionHandler, TransportOptions options, int threadId, int cpuId, ILogger logger)
         {
             if (connectionHandler == null)
             {
@@ -68,11 +75,11 @@ namespace Tmds.Kestrel.Linux
             }
             _connectionHandler = connectionHandler;
             _deferAccept = options.DeferAccept;
-            _coalesceWrites = options.CoalesceWrites;
             _threadId = threadId;
             _cpuId = cpuId;
             _receiveOnIncomingCpu = options.ReceiveOnIncomingCpu;
             _logger = logger;
+            _endPoint = endPoint;
         }
 
         public Task StartAsync()
@@ -96,21 +103,13 @@ namespace Tmds.Kestrel.Linux
                 {
                     _sockets = new ConcurrentDictionary<int, TSocket>();
                     _acceptSockets = new List<TSocket>();
-                    if (_coalesceWrites)
-                    {
-                        _coalescingWrites = new ConcurrentQueue<TSocket>();
-                    }
-
+                    _schedulerAdding = new Queue<ScheduledAction>(1024);
+                    _schedulerRunning = new Queue<ScheduledAction>(1024);
                     _epoll = EPoll.Create();
 
                     _pipeEnds = PipeEnd.CreatePair(blocking: false);
-                    var tsocket = new TSocket(this)
-                    {
-                        Flags = SocketFlags.TypePipe,
-                        Key = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32()
-                    };
-                    _sockets.TryAdd(tsocket.Key, tsocket);
-                    _epoll.Control(EPollOperation.Add, _pipeEnds.ReadEnd, EPollEvents.Readable, new EPollData { Int1 = tsocket.Key, Int2 = tsocket.Key });
+                    int key = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
+                    _epoll.Control(EPollOperation.Add, _pipeEnds.ReadEnd, EPollEvents.Readable, new EPollData { Int1 = key, Int2 = key });
 
                     tcs = _stateChangeCompletion = new TaskCompletionSource<object>();
                     _state = State.Starting;
@@ -129,88 +128,80 @@ namespace Tmds.Kestrel.Linux
             return tcs.Task;
         }
 
-        public void AcceptOn(System.Net.IPEndPoint endPoint)
+        private void AcceptOn(IPEndPoint endPoint)
         {
-            lock (_gate)
+            Socket acceptSocket = null;
+            int key = 0;
+            int port = endPoint.Port;
+            SocketFlags flags = SocketFlags.TypeAccept;
+            try
             {
-                if (_state != State.Started)
+                bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
+                acceptSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false);
+                key = acceptSocket.DangerousGetHandle().ToInt32();
+                if (!ipv4)
                 {
-                    ThrowInvalidState();
+                    // Don't do mapped ipv4
+                    acceptSocket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 1);
                 }
-
-                Socket acceptSocket = null;
-                int key = 0;
-                int port = endPoint.Port;
-                SocketFlags flags = SocketFlags.TypeAccept;
-                try
+                if (_receiveOnIncomingCpu)
                 {
-                    bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
-                    acceptSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false);
-                    key = acceptSocket.DangerousGetHandle().ToInt32();
-                    if (!ipv4)
+                    if (_cpuId != -1)
                     {
-                        // Don't do mapped ipv4
-                        acceptSocket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.IPv6Only, 1);
-                    }
-                    if (_receiveOnIncomingCpu)
-                    {
-                        if (_cpuId != -1)
+                        if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, _cpuId))
                         {
-                            if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, _cpuId))
-                            {
-                                _logger.LogWarning($"Thread {_threadId}: Cannot enable nameof{SocketOptionName.IncomingCpu} for {endPoint}");
-                            }
+                            _logger.LogWarning($"Thread {_threadId}: Cannot enable nameof{SocketOptionName.IncomingCpu} for {endPoint}");
                         }
                     }
-                    // Linux: allow bind during linger time
-                    acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
-                    // Linux: allow concurrent binds and let the kernel do load-balancing
-                    acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReusePort, 1);
-                    if (_deferAccept)
-                    {
-                        // Linux: wait up to 1 sec for data to arrive before accepting socket
-                        acceptSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.DeferAccept, 1);
-                        flags |= SocketFlags.DeferAccept;
-                    }
-
-                    acceptSocket.Bind(endPoint);
-                    if (port == 0)
-                    {
-                        // When testing we want the OS to select a free port
-                        port = acceptSocket.GetLocalIPAddress().Port;
-                    }
-
-                    acceptSocket.Listen(ListenBacklog);
                 }
-                catch
+                // Linux: allow bind during linger time
+                acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+                // Linux: allow concurrent binds and let the kernel do load-balancing
+                acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReusePort, 1);
+                if (_deferAccept)
                 {
-                    acceptSocket?.Dispose();
-                    throw;
+                    // Linux: wait up to 1 sec for data to arrive before accepting socket
+                    acceptSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.DeferAccept, 1);
+                    flags |= SocketFlags.DeferAccept;
                 }
 
-                TSocket tsocket = null;
-                try
+                acceptSocket.Bind(endPoint);
+                if (port == 0)
                 {
-                    tsocket = new TSocket(this)
-                    {
-                        Flags = flags,
-                        Key = key,
-                        Socket = acceptSocket
-                    };
-                    _acceptSockets.Add(tsocket);
-                    _sockets.TryAdd(tsocket.Key, tsocket);
+                    // When testing we want the OS to select a free port
+                    port = acceptSocket.GetLocalIPAddress().Port;
+                }
 
-                    _epoll.Control(EPollOperation.Add, acceptSocket, EPollEvents.Readable, new EPollData { Int1 = tsocket.Key, Int2 = tsocket.Key });
-                }
-                catch
-                {
-                    acceptSocket.Dispose();
-                    _acceptSockets.Remove(tsocket);
-                    _sockets.TryRemove(key, out tsocket);
-                    throw;
-                }
-                endPoint.Port = port;
+                acceptSocket.Listen(ListenBacklog);
             }
+            catch
+            {
+                acceptSocket?.Dispose();
+                throw;
+            }
+
+            TSocket tsocket = null;
+            try
+            {
+                tsocket = new TSocket(this)
+                {
+                    Flags = flags,
+                    Key = key,
+                    Socket = acceptSocket
+                };
+                _acceptSockets.Add(tsocket);
+                _sockets.TryAdd(tsocket.Key, tsocket);
+
+                _epoll.Control(EPollOperation.Add, acceptSocket, EPollEvents.Readable, new EPollData { Int1 = tsocket.Key, Int2 = tsocket.Key });
+            }
+            catch
+            {
+                acceptSocket.Dispose();
+                _acceptSockets.Remove(tsocket);
+                _sockets.TryRemove(key, out tsocket);
+                throw;
+            }
+            endPoint.Port = port;
         }
 
         public async Task CloseAcceptAsync()
@@ -336,6 +327,8 @@ namespace Tmds.Kestrel.Linux
                 }
             }
 
+            AcceptOn(_endPoint);
+
             CompleteStateChange(State.Started);
 
             _pipeFactory = new PipeFactory();
@@ -343,18 +336,20 @@ namespace Tmds.Kestrel.Linux
             bool notPacked = !EPoll.PackedEvents;
             var buffer = stackalloc int[EventBufferLength * (notPacked ? 4 : 3)];
 
+            int statReadEvents = 0;
+            int statWriteEvents = 0;
             int statAcceptEvents = 0;
             int statAccepts = 0;
+            var readEnd = _pipeEnds.ReadEnd;
+            int pipeKey = readEnd.DangerousGetHandle().ToInt32();
+            var epoll = _epoll;
+            var sockets = _sockets;
 
             bool running = true;
-            while (running)
+            bool accepting = true;
+            do
             {
-                bool doCloseAccept = false;
-                int numEvents = _epoll.Wait(buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite);
-                if (_coalesceWrites)
-                {
-                    DoCoalescedWrites();
-                }
+                int numEvents = epoll.Wait(buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite);
                 int* ptr = buffer;
                 for (int i = 0; i < numEvents; i++)
                 {
@@ -365,12 +360,10 @@ namespace Tmds.Kestrel.Linux
                     // 2:Int2 = Key   ==    Int1 = Key
                     // 3:~~~~~~~~~~         Int2 = Key
                     //                      ~~~~~~~~~~
-                    ptr += 2;            // 0 & 1
-                    int key = *ptr++;    // 2
-                    if (notPacked)
-                        ptr++;           // 3
+                    int key = ptr[2];
+                    ptr += notPacked ? 4 : 3;
                     TSocket tsocket;
-                    if (_sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
+                    if (sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
                     {
                         var type = tsocket.Flags & SocketFlags.TypeMask;
                         if (type == SocketFlags.TypeClient)
@@ -378,50 +371,62 @@ namespace Tmds.Kestrel.Linux
                             bool read = (key & DupKeyMask) == 0;
                             if (read)
                             {
+                                statReadEvents++;
                                 tsocket.CompleteReadable();
                             }
                             else
                             {
+                                statWriteEvents++;
                                 tsocket.CompleteWritable();
                             }
                         }
-                        else if (type == SocketFlags.TypeAccept && !doCloseAccept)
+                        else if (accepting)
                         {
                             statAcceptEvents++;
                             statAccepts += HandleAccept(tsocket);
                         }
-                        else // TypePipe
+                    }
+                    else if (key == pipeKey)
+                    {
+                        var action = readEnd.TryReadByte();
+                        if (action.Value == PipeStateChange)
                         {
-                            var action = _pipeEnds.ReadEnd.TryReadByte();
-                            if (action.Value == PipeStateChange)
-                            {
-                                HandleState(ref running, ref doCloseAccept);
-                            }
+                            HandleState(ref running, ref accepting);
                         }
                     }
                 }
-                if (doCloseAccept)
-                {
-                    CloseAccept();
-                }
-            }
-            Stop();
+                DoScheduledWork();
+            } while (running || sockets.Count != 0);
 
-            _logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents}");
+            _logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} W:{_writes} WE:{statWriteEvents}");
+            
+            _epoll.Dispose();
+            _pipeEnds.Dispose();
+            _pipeFactory.Dispose();
 
             CompleteStateChange(State.Stopped);
         }
 
-        private void DoCoalescedWrites()
+        private void DoScheduledWork()
         {
-            Volatile.Write(ref _coalesceWritesOnNextPoll, 0);
-            int count = _coalescingWrites.Count;
-            for (int i = 0; i < count; i++)
+            var loopsRemaining = 1; // actions may lead to more actions
+            bool queueNotEmpty; 
+            do
             {
-                TSocket tsocket;
-                _coalescingWrites.TryDequeue(out tsocket);
-                tsocket.CompleteWritable();
-            }
+                Queue<ScheduledAction> queue;
+                lock (_schedulerGate)
+                {
+                    queue = _schedulerAdding;
+                    _schedulerAdding = _schedulerRunning;
+                    _schedulerRunning = queue;
+                }
+                queueNotEmpty = queue.Count != 0;
+                while (queue.Count != 0)
+                {
+                    var scheduledAction = queue.Dequeue();
+                    scheduledAction.Action();
+                }
+            } while (queueNotEmpty && --loopsRemaining > 0);
         }
 
         private int HandleAccept(TSocket tacceptSocket)
@@ -482,22 +487,6 @@ namespace Tmds.Kestrel.Linux
                 {
                     var readResult = await reader.ReadAsync();
                     ReadableBuffer buffer = readResult.Buffer;
-                    if (_coalesceWrites)
-                    {
-                        reader.Advance(default(ReadCursor));
-                        if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
-                        {
-                            // EOF or TransportThread stopped
-                            break;
-                        }
-                        if (!await CoalescingWrites(tsocket))
-                        {
-                            // TransportThread stopped
-                            break;
-                        }
-                        readResult = await reader.ReadAsync();
-                        buffer = readResult.Buffer;
-                    }
                     ReadCursor end = buffer.Start;
                     try
                     {
@@ -508,6 +497,7 @@ namespace Tmds.Kestrel.Linux
                         }
                         if (!buffer.IsEmpty)
                         {
+                            Interlocked.Increment(ref _writes);
                             var result = TrySend(tsocket.Socket, ref buffer);
                             if (result.IsSuccess && result.Value != 0)
                             {
@@ -588,19 +578,7 @@ namespace Tmds.Kestrel.Linux
             return socket.TrySend(ioVectors, ioVectorLength);
         }
 
-        private WritableAwaitable CoalescingWrites(TSocket tsocket)
-        {
-            tsocket.ResetWritableAwaitable();
-            _coalescingWrites.Enqueue(tsocket);
-            var pending = Interlocked.CompareExchange(ref _coalesceWritesOnNextPoll, 1, 0);
-            if (pending == 0)
-            {
-                _pipeEnds.WriteEnd.WriteByte(PipeCoalesce);
-            }
-            return tsocket.WritableAwaitable;
-        }
-
-        private WritableAwaitable Writable(TSocket tsocket)
+private WritableAwaitable Writable(TSocket tsocket)
         {
             tsocket.ResetWritableAwaitable();
             bool registered = tsocket.DupSocket != null;
@@ -641,7 +619,6 @@ namespace Tmds.Kestrel.Linux
 
         private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
-            // await Readable(tsocket) will yield to the PollThread
             try
             {
                 var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
@@ -765,10 +742,9 @@ namespace Tmds.Kestrel.Linux
             } while (true);
         }
 
-        // Readable is 'rigged' to always return asynchronous
         private ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket, _epoll);
 
-        private void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
+         private void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
         {
             // One caller will end up calling Shutdown, the other will call Dispose.
             // To ensure the Shutdown is executed against an open file descriptor
@@ -808,34 +784,6 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        private void Stop()
-        {
-            _epoll.BlockingDispose();
-
-            var pipeReadKey = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
-            TSocket pipeReadSocket;
-            _sockets.TryRemove(pipeReadKey, out pipeReadSocket);
-
-            foreach (var kv in _sockets)
-            {
-                var tsocket = kv.Value;
-                tsocket.PipeReader.CancelPendingRead();
-                tsocket.PipeWriter.CancelPendingFlush();
-                tsocket.CompleteReadable(stopping: true);
-                tsocket.CompleteWritable(stopping: true);
-            }
-
-            SpinWait sw = new SpinWait();
-            while (!_sockets.IsEmpty)
-            {
-                sw.SpinOnce();
-            }
-
-            _pipeEnds.Dispose();
-
-            _pipeFactory.Dispose(); // also disposes _bufferPool
-        }
-
         private void CloseAccept()
         {
             foreach (var acceptSocket in _acceptSockets)
@@ -849,18 +797,32 @@ namespace Tmds.Kestrel.Linux
             CompleteStateChange(State.AcceptClosed);
         }
 
-        private unsafe void HandleState(ref bool running, ref bool doCloseAccept)
+        private unsafe void HandleState(ref bool running, ref bool accepting)
         {
             lock (_gate)
             {
-                if (_state == State.ClosingAccept)
+                if (_state == State.ClosingAccept && accepting)
                 {
-                    doCloseAccept = true;
+                    accepting = false;
+                    CloseAccept();
                 }
-                else if (_state == State.Stopping)
+                else if (_state == State.Stopping && running)
                 {
                     running = false;
+                    StopSockets();
                 }
+            }
+        }
+
+        private void StopSockets()
+        {
+            foreach (var kv in _sockets)
+            {
+                var tsocket = kv.Value;
+                tsocket.PipeReader.CancelPendingRead();
+                tsocket.PipeWriter.CancelPendingFlush();
+                tsocket.CompleteReadable(stopping: true);
+                tsocket.CompleteWritable(stopping: true);
             }
         }
 
@@ -879,6 +841,20 @@ namespace Tmds.Kestrel.Linux
                 _state = state;
             }
             ThreadPool.QueueUserWorkItem(o => tcs.SetResult(null));
+        }
+
+        public void Schedule(Action action)
+        {
+            bool pending = false;
+            lock (_schedulerGate)
+            {
+                pending = _schedulerAdding.Count > 0;
+                _schedulerAdding.Enqueue(new ScheduledAction { Action = action });
+            }
+            if (!pending)
+            {
+                _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
+            }
         }
     }
 }
