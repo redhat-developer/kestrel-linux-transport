@@ -76,16 +76,36 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public IConnectionContext OnConnection(IConnectionInformation connectionInformation)
+        public IConnectionContext OnConnection(IConnectionInformation connectionInfo)
         {
-            var factory = connectionInformation.PipeFactory;
-            var input = factory.Create(Transport.InputPipeOptions);
-            var output = factory.Create(Transport.OutputPipeOptions);
+            var factory = connectionInfo.PipeFactory;
+            var input = factory.Create(GetInputPipeOptions(connectionInfo.InputWriterScheduler));
+            var output = factory.Create(GetOutputPipeOptions(connectionInfo.OutputReaderScheduler));
 
             _connectionHandler(input.Reader, output.Writer);
 
             return new ConnectionContext(string.Empty, input.Writer, output.Reader);
         }
+
+        // copied from Kestrel
+        private const long _maxRequestBufferSize = 1024 * 1024;
+        private const long _maxResponseBufferSize = 64 * 1024;
+
+        private PipeOptions GetInputPipeOptions(IScheduler writerScheduler) => new PipeOptions
+        {
+            ReaderScheduler = InlineScheduler.Default, // _serviceContext.ThreadPool,
+            WriterScheduler = writerScheduler,
+            MaximumSizeHigh = _maxRequestBufferSize,
+            MaximumSizeLow = _maxRequestBufferSize
+        };
+
+        private PipeOptions GetOutputPipeOptions(IScheduler readerScheduler) => new PipeOptions
+        {
+            ReaderScheduler = readerScheduler,
+            WriterScheduler = InlineScheduler.Default, // _serviceContext.ThreadPool,
+            MaximumSizeHigh = _maxResponseBufferSize,
+            MaximumSizeLow = _maxResponseBufferSize
+        };
 
         public void Dispose()
         {

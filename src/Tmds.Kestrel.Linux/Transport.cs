@@ -205,7 +205,7 @@ namespace Tmds.Kestrel.Linux
                 throw new InvalidOperationException("Already starting");
             }
         }
-
+        /*
         // TODO: We'd like Kestrel to use these values for MaximumSize{Low,Heigh} but the abstraction
         //       doesn't support it.
         public static PipeOptions InputPipeOptions = new PipeOptions()
@@ -226,6 +226,6 @@ namespace Tmds.Kestrel.Linux
             MaximumSizeLow = 1,
             WriterScheduler = InlineScheduler.Default,
             ReaderScheduler = InlineScheduler.Default,
-        };
+        };*/
     }
 }

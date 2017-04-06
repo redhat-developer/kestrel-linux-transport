@@ -21,6 +21,8 @@ namespace Tmds.Kestrel.Linux
         internal const int MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
+        private const int EPollBlocked      = 1;
+        private const int EPollNotBlocked   = 0;
         // Highest bit set in EPollData for writable poll
         // the remaining bits of the EPollData are the key
         // of the _sockets dictionary.
@@ -66,6 +68,7 @@ namespace Tmds.Kestrel.Linux
         private ILogger _logger;
         private IPEndPoint _endPoint;
         private int _writes;
+        private int _epollState;
 
         public TransportThread(IPEndPoint endPoint, IConnectionHandler connectionHandler, TransportOptions options, int threadId, int cpuId, ILogger logger)
         {
@@ -350,6 +353,7 @@ namespace Tmds.Kestrel.Linux
             do
             {
                 int numEvents = epoll.Wait(buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite);
+                Volatile.Write(ref _epollState, EPollNotBlocked);
                 int* ptr = buffer;
                 for (int i = 0; i < numEvents; i++)
                 {
@@ -388,18 +392,22 @@ namespace Tmds.Kestrel.Linux
                     }
                     else if (key == pipeKey)
                     {
-                        var action = readEnd.TryReadByte();
-                        if (action.Value == PipeStateChange)
+                        PosixResult result;
+                        do
                         {
-                            HandleState(ref running, ref accepting);
-                        }
+                            result = readEnd.TryReadByte();
+                            if (result.Value == PipeStateChange)
+                            {
+                                HandleState(ref running, ref accepting);
+                            }
+                        } while (result);
                     }
                 }
                 DoScheduledWork();
             } while (running || sockets.Count != 0);
 
             _logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} W:{_writes} WE:{statWriteEvents}");
-            
+
             _epoll.Dispose();
             _pipeEnds.Dispose();
             _pipeFactory.Dispose();
@@ -427,6 +435,23 @@ namespace Tmds.Kestrel.Linux
                     scheduledAction.Action();
                 }
             } while (queueNotEmpty && --loopsRemaining > 0);
+
+            bool unblockEPoll = false;
+            lock (_schedulerGate)
+            {
+                if (_schedulerAdding.Count > 0)
+                {
+                    unblockEPoll = true;
+                }
+                else
+                {
+                    Volatile.Write(ref _epollState, EPollBlocked);
+                }
+            }
+            if (unblockEPoll)
+            {
+                _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
+            }
         }
 
         private int HandleAccept(TSocket tacceptSocket)
@@ -845,13 +870,13 @@ private WritableAwaitable Writable(TSocket tsocket)
 
         public void Schedule(Action action)
         {
-            bool pending = false;
+            int epollState;
             lock (_schedulerGate)
             {
-                pending = _schedulerAdding.Count > 0;
+                epollState = Interlocked.CompareExchange(ref _epollState, EPollNotBlocked, EPollBlocked);
                 _schedulerAdding.Enqueue(new ScheduledAction { Action = action });
             }
-            if (!pending)
+            if (epollState == EPollBlocked)
             {
                 _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
             }
