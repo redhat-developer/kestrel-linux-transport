@@ -9,6 +9,8 @@ before_install:
 - sudo apt-get install dotnet-dev-1.0.0-preview2-1-003177
 script:
 - dotnet restore
+- pushd samples/HttpServer && dotnet build && popd
+- pushd samples/KestrelSample && dotnet build && popd
 - pushd test/Tmds.Kestrel.Linux.Test && dotnet test && popd
 - dotnet pack src/Tmds.Kestrel.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER"
   --output .
