@@ -1,10 +1,10 @@
 using System;
-using System.IO.Pipelines;
 using System.Text;
 using System.Text.Formatting;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
+using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Tmds.Kestrel.Linux;
 
 namespace ConsoleApplication

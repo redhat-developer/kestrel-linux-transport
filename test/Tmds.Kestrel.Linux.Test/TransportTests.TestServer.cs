@@ -1,10 +1,10 @@
 using System;
-using System.IO.Pipelines;
 using System.Net;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
+using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Tmds.Kestrel.Linux;
 
 namespace Tests

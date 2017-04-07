@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.Logging;
 using Tmds.Posix;
@@ -603,7 +603,7 @@ namespace Tmds.Kestrel.Linux
             return socket.TrySend(ioVectors, ioVectorLength);
         }
 
-private WritableAwaitable Writable(TSocket tsocket)
+        private WritableAwaitable Writable(TSocket tsocket)
         {
             tsocket.ResetWritableAwaitable();
             bool registered = tsocket.DupSocket != null;

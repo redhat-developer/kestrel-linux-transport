@@ -1,8 +1,8 @@
 using System;
-using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 
 namespace Tmds.Kestrel.Linux

@@ -18,7 +18,6 @@
         "NETStandard.Library": "1.6.1",
         "Tmds.Posix": "0.1.0-master-linux-*",
         "System.Threading.Thread": "4.3.0",
-        "System.IO.Pipelines": "0.1.0-*",
         "Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions": "2.0.0-*",
         "Microsoft.AspNetCore.Hosting.Abstractions": "1.1.1",
         "Microsoft.Extensions.Logging": "1.1.1",
