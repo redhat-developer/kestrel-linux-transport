@@ -4,7 +4,6 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Microsoft.Extensions.Logging;
 
 namespace Tmds.Kestrel.Linux
@@ -99,7 +98,7 @@ namespace Tmds.Kestrel.Linux
         private TransportThread[] CreateTransportThreads()
         {
             var threads = new TransportThread[_transportOptions.ThreadCount];
-            List<int> preferredCpuIds = null;
+            IList<int> preferredCpuIds = null;
             if (_transportOptions.SetThreadAffinity)
             {
                 preferredCpuIds = GetPreferredCpuIds();
@@ -115,8 +114,12 @@ namespace Tmds.Kestrel.Linux
             return threads;
         }
 
-        private List<int> GetPreferredCpuIds()
+        private IList<int> GetPreferredCpuIds()
         {
+            if (!_transportOptions.ParsedCpuSet.IsDefault)
+            {
+                return _transportOptions.ParsedCpuSet.Cpus;
+            }
             var ids = new List<int>();
             bool found = true;
             int level = 0;

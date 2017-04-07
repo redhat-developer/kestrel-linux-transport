@@ -19,11 +19,8 @@ namespace Tmds.Kestrel.Linux
             ShutdownSend    = 0x02,
             ShutdownReceive = 0x04,
 
-            Stopping        = 0x08,
-
             TypeAccept      = 0x10,
             TypeClient      = 0x20,
-            TypePipe        = 0x30,
             TypeMask        = 0x30,
 
             DeferAccept     = 0x40
