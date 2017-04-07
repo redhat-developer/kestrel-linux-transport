@@ -46,14 +46,14 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        class TSocket : IWritableAwaiter, IConnectionInformation
+        class TSocket : IConnectionInformation
         {
             private TransportThread _thread;
             public TSocket(TransportThread thread)
             {
                 _thread = thread;
             }
-            private static readonly Action _completedSentinel = delegate { };
+            private static readonly Action _canceledSentinel = delegate { };
 
             private int _flags;
             public SocketFlags Flags
@@ -83,69 +83,54 @@ namespace Tmds.Kestrel.Linux
             public IPEndPoint  LocalAddress;
 
             private Action _writableCompletion;
-            bool IWritableAwaiter.IsCompleted
+            public bool SetWritableContinuation(Action continuation)
             {
-                get
-                {
-                    return ReferenceEquals(_completedSentinel, Volatile.Read(ref _writableCompletion));
-                }
-            }
-            bool IWritableAwaiter.GetResult()
-            {
-                return (Flags & SocketFlags.Stopping) == 0;
-            }
-            void IWritableAwaiter.OnCompleted(Action continuation)
-            {
-                if (continuation != null)
-                {
-                    var oldValue = Interlocked.CompareExchange(ref _writableCompletion, continuation, null);
-
-                    if (ReferenceEquals(oldValue, _completedSentinel))
-                    {
-                        // already complete; calback sync
-                        continuation.Invoke();
-                    }
-                }
-            }
-            public void CompleteWritable(bool stopping = false)
-            {
-                if (stopping)
-                {
-                    AddFlags(SocketFlags.Stopping);
-                }
-
-                Action continuation = Interlocked.Exchange(ref _writableCompletion, _completedSentinel);
-                if (continuation != null && !ReferenceEquals(continuation, _completedSentinel))
-                {
-                    continuation.Invoke();
-                }
-            }
-            public void ResetWritableAwaitable()
-            {
-                Volatile.Write(ref _writableCompletion, null);
+                var oldValue = Interlocked.CompareExchange(ref _writableCompletion, continuation, null);
+                return oldValue == null;
             }
 
-            private Action _readableCompletion;
-            public bool GetReadableResult()
-            {
-                return (Flags & SocketFlags.Stopping) == 0;
-            }
-            public void SetReadableContinuation(Action continuation)
-            {
-                Volatile.Write(ref _readableCompletion, continuation);
-            }
-            public void CompleteReadable(bool stopping = false)
-            {
-                if (stopping)
-                {
-                    AddFlags(SocketFlags.Stopping);
-                }
+            public bool IsWriteCancelled() => ReferenceEquals(_writableCompletion, _canceledSentinel);
 
-                Action continuation = Interlocked.Exchange(ref _readableCompletion, null);
+            public void CancelWritable()
+            {
+                Action continuation = Interlocked.Exchange(ref _writableCompletion, _canceledSentinel);
                 continuation?.Invoke();
             }
 
-            public WritableAwaitable WritableAwaitable => new WritableAwaitable(this);
+            public void CompleteWritable()
+            {
+                Action continuation = Volatile.Read(ref _writableCompletion);
+                if (!ReferenceEquals(continuation, _canceledSentinel))
+                {
+                    Volatile.Write(ref _writableCompletion, null);
+                    continuation.Invoke();
+                }
+            }
+
+            private Action _readableCompletion;
+            public bool SetReadableContinuation(Action continuation)
+            {
+                var oldValue = Interlocked.CompareExchange(ref _readableCompletion, continuation, null);
+                return oldValue == null;
+            }
+
+            public bool IsReadCancelled() => ReferenceEquals(_readableCompletion, _canceledSentinel);
+
+            public void CancelReadable()
+            {
+                Action continuation = Interlocked.Exchange(ref _readableCompletion, _canceledSentinel);
+                continuation?.Invoke();
+            }
+
+            public void CompleteReadable()
+            {
+                Action continuation = Volatile.Read(ref _readableCompletion);
+                if (!ReferenceEquals(continuation, _canceledSentinel))
+                {
+                    Volatile.Write(ref _readableCompletion, null);
+                    continuation.Invoke();
+                }
+            }
 
             IPEndPoint IConnectionInformation.RemoteEndPoint => PeerAddress;
 
@@ -161,15 +146,6 @@ namespace Tmds.Kestrel.Linux
             ITimeoutControl IConnectionInformation.TimeoutControl => _timeoutControl;
         }
 
-        interface IWritableAwaiter
-        {
-            bool IsCompleted { get; }
-
-            bool GetResult();
-
-            void OnCompleted(Action continuation);
-        }
-
         struct ReadableAwaitable: ICriticalNotifyCompletion
         {
             private readonly TSocket _tsocket;
@@ -183,7 +159,7 @@ namespace Tmds.Kestrel.Linux
 
             public bool IsCompleted => false;
 
-            public bool GetResult() => _tsocket.GetReadableResult();
+            public bool GetResult() => !_tsocket.IsReadCancelled();
 
             public ReadableAwaitable GetAwaiter() => this;
 
@@ -191,29 +167,47 @@ namespace Tmds.Kestrel.Linux
 
             public void OnCompleted(Action continuation)
             {
-                _tsocket.SetReadableContinuation(continuation);
-                TransportThread.RegisterForReadable(_tsocket, _epoll);
+                if (_tsocket.SetReadableContinuation(continuation))
+                {
+                    TransportThread.RegisterForReadable(_tsocket, _epoll);
+                }
+                else
+                {
+                    continuation();
+                }
             }
         }
 
         struct WritableAwaitable: ICriticalNotifyCompletion
         {
-            private readonly IWritableAwaiter _awaiter;
+            private readonly TSocket _tsocket;
+            private readonly EPoll _epoll;
 
-            public WritableAwaitable(IWritableAwaiter awaiter)
+            public WritableAwaitable(TSocket awaiter, EPoll epoll)
             {
-                _awaiter = awaiter;
+                _tsocket = awaiter;
+                _epoll = epoll;
             }
 
-            public bool IsCompleted => _awaiter.IsCompleted;
+            public bool IsCompleted => false;
 
-            public bool GetResult() => _awaiter.GetResult();
+            public bool GetResult() => !_tsocket.IsWriteCancelled();
 
             public WritableAwaitable GetAwaiter() => this;
 
-            public void UnsafeOnCompleted(Action continuation) => _awaiter.OnCompleted(continuation);
+            public void UnsafeOnCompleted(Action continuation) => OnCompleted(continuation);
 
-            public void OnCompleted(Action continuation) => _awaiter.OnCompleted(continuation);
+            public void OnCompleted(Action continuation)
+            {
+                if (_tsocket.SetWritableContinuation(continuation))
+                {
+                    TransportThread.RegisterForWritable(_tsocket, _epoll);
+                }
+                else
+                {
+                    continuation();
+                }
+            }
         }
     }
 }

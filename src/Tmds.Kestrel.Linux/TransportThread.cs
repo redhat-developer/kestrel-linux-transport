@@ -603,9 +603,10 @@ namespace Tmds.Kestrel.Linux
             return socket.TrySend(ioVectors, ioVectorLength);
         }
 
-        private WritableAwaitable Writable(TSocket tsocket)
+        private WritableAwaitable Writable(TSocket tsocket) => new WritableAwaitable(tsocket, _epoll);
+
+        private static void RegisterForWritable(TSocket tsocket, EPoll epoll)
         {
-            tsocket.ResetWritableAwaitable();
             bool registered = tsocket.DupSocket != null;
             // To avoid having to synchronize the event mask with the Readable
             // we dup the socket.
@@ -615,31 +616,25 @@ namespace Tmds.Kestrel.Linux
             {
                 tsocket.DupSocket = tsocket.Socket.Duplicate();
             }
-            _epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
+            epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
                             tsocket.DupSocket,
                             EPollEvents.Writable | EPollEvents.OneShot,
                             new EPollData{ Int1 = tsocket.Key | DupKeyMask, Int2 = tsocket.Key | DupKeyMask } );
-            return tsocket.WritableAwaitable;
         }
+
+        private ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket, _epoll);
 
         private static void RegisterForReadable(TSocket tsocket, EPoll epoll)
         {
-            try
+            bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
+            if (!registered)
             {
-                bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
-                if (!registered)
-                {
-                    tsocket.AddFlags(SocketFlags.EPollRegistered);
-                }
-                epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
-                    tsocket.Socket,
-                    EPollEvents.Readable | EPollEvents.OneShot,
-                    new EPollData{ Int1 = tsocket.Key, Int2 = tsocket.Key });
+                tsocket.AddFlags(SocketFlags.EPollRegistered);
             }
-            catch (System.Exception)
-            {
-                tsocket.CompleteReadable(stopping: true);
-            }
+            epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
+                tsocket.Socket,
+                EPollEvents.Readable | EPollEvents.OneShot,
+                new EPollData{ Int1 = tsocket.Key, Int2 = tsocket.Key });
         }
 
         private async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
@@ -767,8 +762,6 @@ namespace Tmds.Kestrel.Linux
             } while (true);
         }
 
-        private ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket, _epoll);
-
          private void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
         {
             // One caller will end up calling Shutdown, the other will call Dispose.
@@ -841,13 +834,14 @@ namespace Tmds.Kestrel.Linux
 
         private void StopSockets()
         {
-            foreach (var kv in _sockets)
+            var clone = new Dictionary<int, TSocket>(_sockets);
+            foreach (var kv in clone)
             {
                 var tsocket = kv.Value;
                 tsocket.PipeReader.CancelPendingRead();
                 tsocket.PipeWriter.CancelPendingFlush();
-                tsocket.CompleteReadable(stopping: true);
-                tsocket.CompleteWritable(stopping: true);
+                tsocket.CancelReadable();
+                tsocket.CancelWritable();
             }
         }
 
