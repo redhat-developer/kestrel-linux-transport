@@ -862,7 +862,7 @@ namespace Tmds.Kestrel.Linux
             ThreadPool.QueueUserWorkItem(o => tcs.SetResult(null));
         }
 
-        public void Schedule(Action action)
+        void IScheduler.Schedule(Action action)
         {
             int epollState;
             lock (_schedulerGate)
