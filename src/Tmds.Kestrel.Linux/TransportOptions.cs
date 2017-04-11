@@ -1,5 +1,3 @@
-using System;
-
 namespace Tmds.Kestrel.Linux
 {
     public class TransportOptions
@@ -10,23 +8,14 @@ namespace Tmds.Kestrel.Linux
 
         public int ThreadCount { get; set; } = AvailableProcessors;
 
-        public string CpuSet
+        public CpuSet CpuSet
         {
-            get { return _cpuSet.ToString(); }
+            get { return _cpuSet; }
             set
             {
-                if (string.IsNullOrEmpty(value))
+                _cpuSet = value;
+                if (_cpuSet.Cpus.Length != 0)
                 {
-                    ThreadCount = AvailableProcessors;
-                }
-                else
-                {
-                    CpuSet set;
-                    if (!Tmds.Kestrel.Linux.CpuSet.TryParse(value, out set))
-                    {
-                        throw new FormatException();
-                    }
-                    _cpuSet = set;
                     ThreadCount = _cpuSet.Cpus.Length;
                 }
              }

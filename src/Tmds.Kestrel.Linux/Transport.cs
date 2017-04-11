@@ -116,7 +116,7 @@ namespace Tmds.Kestrel.Linux
 
         private IList<int> GetPreferredCpuIds()
         {
-            if (!_transportOptions.ParsedCpuSet.IsDefault)
+            if (_transportOptions.ParsedCpuSet.Cpus.Length != 0)
             {
                 return _transportOptions.ParsedCpuSet.Cpus;
             }

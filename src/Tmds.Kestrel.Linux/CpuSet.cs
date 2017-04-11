@@ -1,26 +1,44 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 
 namespace Tmds.Kestrel.Linux
 {
-    struct CpuSet
+    [TypeConverter(typeof(CpuSetTypeConverter))]
+    public struct CpuSet
     {
         int[] _cpus;
 
-        public int[] Cpus => _cpus;
-
-        public bool IsDefault => _cpus == null;
+        public int[] Cpus => _cpus ?? Array.Empty<int>();
 
         private CpuSet(int[] cpus)
         {
             _cpus = cpus;
         }
 
-        public static bool TryParse(string set, out CpuSet cpus)
+        private static bool ParseFailed(bool tryParse, string error)
+        {
+            if (tryParse)
+            {
+                return false;
+            }
+            throw new FormatException(error);
+        }
+
+        public static bool Parse(string set, out CpuSet cpus, bool tryParse)
         {
             cpus = default(CpuSet);
-            if (string.IsNullOrEmpty(set))
+            if (set == null)
             {
+                if (tryParse)
+                {
+                    return false;
+                }
+                throw new ArgumentNullException(nameof(set));
+            }
+            if (set.Length == 0)
+            {
+                cpus = new CpuSet(Array.Empty<int>());
                 return true;
             }
             int index = 0;
@@ -30,7 +48,7 @@ namespace Tmds.Kestrel.Linux
                 int start;
                 if (!TryParseNumber(set, ref index, out start))
                 {
-                    return false;
+                    return ParseFailed(tryParse, $"Can not parse number at {index}");
                 }
                 if (index == set.Length)
                 {
@@ -49,11 +67,11 @@ namespace Tmds.Kestrel.Linux
                     int end;
                     if (!TryParseNumber(set, ref index, out end))
                     {
-                        return false;
+                        return ParseFailed(tryParse, $"Can not parse number at {index}");
                     }
                     if (start > end)
                     {
-                        return false;
+                        return ParseFailed(tryParse, "End of range is larger than start");
                     }
                     for (int i = start; i <= end; i++)
                     {
@@ -70,16 +88,30 @@ namespace Tmds.Kestrel.Linux
                     }
                     else
                     {
-                        return false;
+                        return ParseFailed(tryParse, $"Invalid character at {index}: '{set[index]}'");
                     }
                 }
                 else
                 {
-                    return false;
+                    return ParseFailed(tryParse, $"Invalid character at {index}: '{set[index]}'");
                 }
             } while (index != set.Length);
-            cpus = new CpuSet(cpuList.ToArray());
+            var cpuArray = cpuList.ToArray();
+            Array.Sort(cpuArray);
+            cpus = new CpuSet(cpuArray);
             return true;
+        }
+
+        public static bool TryParse(string set, out CpuSet cpus)
+        {
+            return Parse(set, out cpus, tryParse: true);
+        }
+
+        public static CpuSet Parse(string set)
+        {
+            CpuSet cpus;
+            Parse(set, out cpus, tryParse: false);
+            return cpus;
         }
 
         private static bool TryParseNumber(string s, ref int index, out int value)
