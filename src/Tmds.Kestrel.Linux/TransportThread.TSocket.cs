@@ -26,23 +26,6 @@ namespace Tmds.Kestrel.Linux
             DeferAccept     = 0x40
         }
 
-        // TODO: we don't support this and it looks like this will be removed from the
-        //       IConnectionInformation interface
-        class UnsupportedTimeoutControl : ITimeoutControl
-        {
-            public void CancelTimeout()
-            {
-            }
-
-            public void ResetTimeout(long milliseconds, TimeoutAction timeoutAction)
-            {
-            }
-
-            public void SetTimeout(long milliseconds, TimeoutAction timeoutAction)
-            {
-            }
-        }
-
         class TSocket : IConnectionInformation
         {
             private TransportThread _thread;
@@ -138,9 +121,6 @@ namespace Tmds.Kestrel.Linux
             IScheduler IConnectionInformation.InputWriterScheduler => InlineScheduler.Default;
 
             IScheduler IConnectionInformation.OutputReaderScheduler => _thread;
-
-            private static ITimeoutControl _timeoutControl = new UnsupportedTimeoutControl();
-            ITimeoutControl IConnectionInformation.TimeoutControl => _timeoutControl;
         }
 
         struct ReadableAwaitable: ICriticalNotifyCompletion
