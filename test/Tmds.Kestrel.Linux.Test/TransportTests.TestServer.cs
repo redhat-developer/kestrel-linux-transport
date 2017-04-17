@@ -52,8 +52,9 @@ namespace Tests
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept
             };
-            var logger = new ConsoleLogger(nameof(TestServer), (n, l) => false, includeScopes: false);
-            _transport = new Transport(_serverAddress, this, transportOptions, logger);
+            var loggerFactory = new LoggerFactory();
+            loggerFactory.AddConsole((n, l) => false);
+            _transport = new Transport(_serverAddress, this, transportOptions, loggerFactory);
         }
 
         public TestServer(TestServerConnectionHandler connectionHandler) :

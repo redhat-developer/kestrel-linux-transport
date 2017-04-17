@@ -3,10 +3,21 @@ namespace Tmds.Kestrel.Linux
     public class TransportOptions
     {
         private CpuSet _cpuSet = default(CpuSet);
+        private int? _threadCount;
 
         internal CpuSet ParsedCpuSet { get { return _cpuSet; } }
 
-        public int ThreadCount { get; set; } = AvailableProcessors;
+        public int ThreadCount
+        {
+            get
+            {
+                return _threadCount ?? (CpuSet.Cpus.Length != 0 ? CpuSet.Cpus.Length : AvailableProcessors);
+            }
+            set
+            {
+                _threadCount = value;
+            }
+        }
 
         public CpuSet CpuSet
         {

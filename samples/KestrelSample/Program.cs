@@ -52,7 +52,7 @@ namespace SampleApp
             bool ta = args.Contains("ta");
             bool ic = args.Contains("ic");
             bool da = args.Contains("da");
-            bool notp = args.Contains("notp");
+            bool tt = args.Contains("tt");
             _log = args.Contains("log");
             int threadCount = 0;
             if (args.Length ==0 || !int.TryParse(args[args.Length -1], out threadCount))
@@ -61,7 +61,7 @@ namespace SampleApp
             }
 
             var hostBuilder = new WebHostBuilder()
-                .UseKestrel()
+                .UseKestrel(options => options.UseTransportThread = tt)
                 .UseStartup<Startup>();
 
             if (libuv)
@@ -82,12 +82,6 @@ namespace SampleApp
             }
 
             var host = hostBuilder.Build();
-
-            if (notp)
-            {
-                System.Console.WriteLine("ThreadPoolDispatching disabled");
-                host.ServerFeatures.Get<InternalKestrelServerOptions>().ThreadPoolDispatching = false;
-            }
 
             host.Run();
         }

@@ -15,10 +15,11 @@ namespace Tmds.Kestrel.Linux
         private IConnectionHandler _connectionHandler;
         private TransportThread[] _threads;
         private TransportOptions _transportOptions;
+        private ILoggerFactory _loggerFactory;
         private ILogger _logger;
 
-        public Transport(IEndPointInformation IEndPointInformation, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger) :
-            this(CreateEndPointFromIEndPointInformation(IEndPointInformation), connectionHandler, transportOptions, logger)
+        public Transport(IEndPointInformation IEndPointInformation, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILoggerFactory loggerFactory) :
+            this(CreateEndPointFromIEndPointInformation(IEndPointInformation), connectionHandler, transportOptions, loggerFactory)
         {}
 
         private static IPEndPoint CreateEndPointFromIEndPointInformation(IEndPointInformation IEndPointInformation)
@@ -39,7 +40,7 @@ namespace Tmds.Kestrel.Linux
             return IEndPointInformation.IPEndPoint;
         }
 
-        public Transport(IPEndPoint listenEndPoint, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILogger logger)
+        public Transport(IPEndPoint listenEndPoint, IConnectionHandler connectionHandler, TransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
             if (connectionHandler == null)
             {
@@ -49,9 +50,9 @@ namespace Tmds.Kestrel.Linux
             {
                 throw new ArgumentException(nameof(transportOptions));
             }
-            if (logger == null)
+            if (loggerFactory == null)
             {
-                throw new ArgumentException(nameof(logger));
+                throw new ArgumentException(nameof(loggerFactory));
             }
             if (listenEndPoint == null)
             {
@@ -61,7 +62,8 @@ namespace Tmds.Kestrel.Linux
             _endPoint = listenEndPoint;
             _connectionHandler = connectionHandler;
             _transportOptions = transportOptions;
-            _logger = logger;
+            _loggerFactory = loggerFactory;
+            _logger = loggerFactory.CreateLogger<Transport>();
         }
 
         public async Task BindAsync()
@@ -108,7 +110,7 @@ namespace Tmds.Kestrel.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(_endPoint, _connectionHandler, _transportOptions, threadId, cpuId, _logger);
+                var thread = new TransportThread(_endPoint, _connectionHandler, _transportOptions, threadId, cpuId, _loggerFactory);
                 threads[i] = thread;
             }
             return threads;

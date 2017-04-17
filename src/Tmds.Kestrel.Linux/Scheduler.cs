@@ -8,6 +8,8 @@ namespace Tmds.Kestrel.Linux
 
         [DllImport(Interop.Library, EntryPoint="TmdsKL_SetCurrentThreadAffinity")]
         public extern static PosixResult SetCurrentThreadAffinity(int cpuId);
+        [DllImport(Interop.Library, EntryPoint="TmdsKL_ClearCurrentThreadAffinity")]
+        public extern static PosixResult ClearCurrentThreadAffinity();
 
         [DllImport(Interop.Library, EntryPoint="TmdsKL_GetAvailableCpusForProcess")]
         public extern static PosixResult GetAvailableCpusForProcess();
@@ -18,6 +20,23 @@ namespace Tmds.Kestrel.Linux
         public static PosixResult TrySetCurrentThreadAffinity(int cpuId)
         {
             return SchedulerInterop.SetCurrentThreadAffinity(cpuId);
+        }
+
+        public static void SetCurrentThreadAffinity(int cpuId)
+        {
+            TrySetCurrentThreadAffinity(cpuId)
+                .ThrowOnError();
+        }
+
+        public static PosixResult TryClearCurrentThreadAffinity()
+        {
+            return SchedulerInterop.ClearCurrentThreadAffinity();
+        }
+
+        public static void ClearCurrentThreadAffinity()
+        {
+            TryClearCurrentThreadAffinity()
+                .ThrowOnError();
         }
 
         public static int GetAvailableCpusForProcess()

@@ -28,10 +28,9 @@ namespace Tmds.Kestrel.Linux
 
         class TSocket : IConnectionInformation
         {
-            private TransportThread _thread;
-            public TSocket(TransportThread thread)
+            public TSocket(ThreadContext threadContext)
             {
-                _thread = thread;
+                ThreadContext = threadContext;
             }
             private static readonly Action _canceledSentinel = delegate { };
 
@@ -54,6 +53,7 @@ namespace Tmds.Kestrel.Linux
                 return (SocketFlags)oldValue;
             }
 
+            public ThreadContext ThreadContext;
             public int         Key;
             public Socket      Socket;
             public Socket      DupSocket;
@@ -116,22 +116,20 @@ namespace Tmds.Kestrel.Linux
 
             IPEndPoint IConnectionInformation.LocalEndPoint => LocalAddress;
 
-            PipeFactory IConnectionInformation.PipeFactory => _thread._pipeFactory;
+            PipeFactory IConnectionInformation.PipeFactory => ThreadContext.PipeFactory;
 
             IScheduler IConnectionInformation.InputWriterScheduler => InlineScheduler.Default;
 
-            IScheduler IConnectionInformation.OutputReaderScheduler => _thread;
+            IScheduler IConnectionInformation.OutputReaderScheduler => ThreadContext;
         }
 
         struct ReadableAwaitable: ICriticalNotifyCompletion
         {
             private readonly TSocket _tsocket;
-            private readonly EPoll _epoll;
 
-            public ReadableAwaitable(TSocket awaiter, EPoll epoll)
+            public ReadableAwaitable(TSocket awaiter)
             {
                 _tsocket = awaiter;
-                _epoll = epoll;
             }
 
             public bool IsCompleted => false;
@@ -146,7 +144,7 @@ namespace Tmds.Kestrel.Linux
             {
                 if (_tsocket.SetReadableContinuation(continuation))
                 {
-                    TransportThread.RegisterForReadable(_tsocket, _epoll);
+                    TransportThread.RegisterForReadable(_tsocket);
                 }
                 else
                 {
@@ -158,12 +156,10 @@ namespace Tmds.Kestrel.Linux
         struct WritableAwaitable: ICriticalNotifyCompletion
         {
             private readonly TSocket _tsocket;
-            private readonly EPoll _epoll;
 
-            public WritableAwaitable(TSocket awaiter, EPoll epoll)
+            public WritableAwaitable(TSocket awaiter)
             {
                 _tsocket = awaiter;
-                _epoll = epoll;
             }
 
             public bool IsCompleted => false;
@@ -178,7 +174,7 @@ namespace Tmds.Kestrel.Linux
             {
                 if (_tsocket.SetWritableContinuation(continuation))
                 {
-                    TransportThread.RegisterForWritable(_tsocket, _epoll);
+                    TransportThread.RegisterForWritable(_tsocket);
                 }
                 else
                 {

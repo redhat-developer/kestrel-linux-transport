@@ -8,7 +8,7 @@ namespace Tmds.Kestrel.Linux
     public class TransportFactory : ITransportFactory
     {
         private TransportOptions _options;
-        private ILogger _logger;
+        private ILoggerFactory _loggerFactory;
         public TransportFactory(IOptions<TransportOptions> options,
             ILoggerFactory loggerFactory)
         {
@@ -21,11 +21,11 @@ namespace Tmds.Kestrel.Linux
                 throw new ArgumentNullException(nameof(loggerFactory));
             }
             _options = options.Value;
-            _logger = loggerFactory.CreateLogger<Transport>();
+            _loggerFactory = loggerFactory;
         }
         public ITransport Create(IEndPointInformation IEndPointInformation, IConnectionHandler handler)
         {
-            return new Transport(IEndPointInformation, handler, _options, _logger);
+            return new Transport(IEndPointInformation, handler, _options, _loggerFactory);
         }
     }
 }
