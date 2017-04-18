@@ -2,7 +2,6 @@ namespace Tmds.Kestrel.Linux
 {
     public class TransportOptions
     {
-        private CpuSet _cpuSet = default(CpuSet);
         private int? _threadCount;
 
         public int ThreadCount
@@ -17,18 +16,7 @@ namespace Tmds.Kestrel.Linux
             }
         }
 
-        public CpuSet CpuSet
-        {
-            get { return _cpuSet; }
-            set
-            {
-                _cpuSet = value;
-                if (_cpuSet.Cpus.Length != 0)
-                {
-                    ThreadCount = _cpuSet.Cpus.Length;
-                }
-             }
-        }
+        public CpuSet CpuSet { get; set; }
 
         public bool SetThreadAffinity { get; set; } = false;
 
