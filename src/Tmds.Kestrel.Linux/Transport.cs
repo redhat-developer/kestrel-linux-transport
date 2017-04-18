@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Tmds.Kestrel.Linux
 {
-    public class Transport : ITransport
+    internal class Transport : ITransport
     {
         private static readonly TransportThread[] EmptyThreads = Array.Empty<TransportThread>();
         private IPEndPoint _endPoint;
