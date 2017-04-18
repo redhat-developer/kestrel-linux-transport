@@ -11,6 +11,8 @@ namespace Tmds.Kestrel.Linux
 
         public int[] Cpus => _cpus ?? Array.Empty<int>();
 
+        public bool IsEmpty => _cpus == null || _cpus.Length == 0;
+
         private CpuSet(int[] cpus)
         {
             _cpus = cpus;

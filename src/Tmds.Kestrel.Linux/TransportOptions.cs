@@ -5,13 +5,11 @@ namespace Tmds.Kestrel.Linux
         private CpuSet _cpuSet = default(CpuSet);
         private int? _threadCount;
 
-        internal CpuSet ParsedCpuSet { get { return _cpuSet; } }
-
         public int ThreadCount
         {
             get
             {
-                return _threadCount ?? (CpuSet.Cpus.Length != 0 ? CpuSet.Cpus.Length : AvailableProcessors);
+                return _threadCount ?? (CpuSet.Cpus.Length != 0 ? CpuSet.Cpus.Length : Scheduler.GetAvailableCpusForProcess());
             }
             set
             {
@@ -37,7 +35,5 @@ namespace Tmds.Kestrel.Linux
         public bool ReceiveOnIncomingCpu { get; set; } = false;
 
         public bool DeferAccept { get; set; } = true;
-
-        private static int AvailableProcessors => Scheduler.GetAvailableCpusForProcess();
     }
 }
