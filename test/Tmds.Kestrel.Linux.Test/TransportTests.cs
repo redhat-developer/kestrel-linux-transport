@@ -55,7 +55,7 @@ namespace Tests
             }
         }
 
-        [Theory]
+        [Fact]
         public async Task StopDisconnectsClient()
         {
             using (var testServer = new TestServer())

@@ -2,15 +2,13 @@ language: c
 sudo: required
 dist: trusty
 before_install:
-- sudo sh -c 'echo "deb [arch=amd64] https://apt-mo.trafficmanager.net/repos/dotnet/
-  trusty main" > /etc/apt/sources.list.d/dotnetdev.list'
+- sudo sh -c 'echo "deb [arch=amd64] https://apt-mo.trafficmanager.net/repos/dotnet-release/ trusty main" > /etc/apt/sources.list.d/dotnetdev.list'
 - sudo apt-key adv --keyserver apt-mo.trafficmanager.net --recv-keys 417A0893
 - sudo apt-get update
-- sudo apt-get install dotnet-dev-1.0.0-preview2-1-003177
+- sudo apt-get install dotnet-dev-1.0.1
 script:
-- dotnet restore
-- pushd samples/KestrelSample && dotnet build && popd
-- pushd test/Tmds.Kestrel.Linux.Test && dotnet test && popd
+- pushd samples/KestrelSample && dotnet restore && dotnet build && popd
+- pushd test/Tmds.Kestrel.Linux.Test && dotnet restore && dotnet test && popd
 - dotnet pack src/Tmds.Kestrel.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER"
   --output .
 after_success:
