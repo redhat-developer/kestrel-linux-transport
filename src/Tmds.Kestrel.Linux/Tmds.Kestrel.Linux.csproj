@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <VersionPrefix>0.1.0</VersionPrefix>
-    <TargetFramework>netcoreapp1.1</TargetFramework>
+    <TargetFramework>netstandard2.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DebugType>portable</DebugType>
   </PropertyGroup>
