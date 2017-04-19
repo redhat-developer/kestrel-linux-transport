@@ -22,7 +22,7 @@ script:
   --output .
 after_success:
 - 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
-  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg
+  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg
   https://www.myget.org/F/tmds/api/v2/package ; fi'
 
 env:
