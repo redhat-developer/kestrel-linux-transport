@@ -43,6 +43,21 @@ namespace SampleApp
 
         public static void Main(string[] args)
         {
+            if (args.Contains("--help"))
+            {
+                System.Console.WriteLine("Options: [libuv] [-c<cpuset>] [-t<threadcount>] [ta] [ic] [noda] [nott]");
+                System.Console.WriteLine("  General:");
+                System.Console.WriteLine("\tlibuv    Use libuv Transport instead of Linux Transport");
+                System.Console.WriteLine("\t-t<tc>   Number of transport threads");
+                System.Console.WriteLine("\tnott     Defer requests to thread pool");
+                System.Console.WriteLine("  Linux transport specific:");
+                System.Console.WriteLine("\tta       Set thread affinity");
+                System.Console.WriteLine("\tic       Receive on incoming cpu (implies ta)");
+                System.Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
+                System.Console.WriteLine("\tnoda     No deferred accept");
+                return;
+            }
+
             TaskScheduler.UnobservedTaskException += (sender, e) =>
             {
                 Console.WriteLine("Unobserved exception: {0}", e.Exception);
@@ -51,13 +66,39 @@ namespace SampleApp
             bool libuv = args.Contains("libuv");
             bool ta = args.Contains("ta");
             bool ic = args.Contains("ic");
-            bool da = args.Contains("da");
-            bool tt = args.Contains("tt");
+            bool da = !args.Contains("noda");
+            bool tt = !args.Contains("nott");
             _log = args.Contains("log");
             int threadCount = 0;
-            if (args.Length ==0 || !int.TryParse(args[args.Length -1], out threadCount))
+            CpuSet cpuSet = default(CpuSet);
+            foreach (var arg in args)
             {
-                threadCount = Environment.ProcessorCount << 1;
+                if (arg.StartsWith("-c"))
+                {
+                    cpuSet = CpuSet.Parse(arg.Substring(2));
+                    ta = true;
+                }
+                else if (arg.StartsWith("-t"))
+                {
+                    threadCount = int.Parse(arg.Substring(2));
+                }
+            }
+            if (ic)
+            {
+                ta = true;
+            }
+            if (threadCount == 0)
+            {
+                threadCount = (libuv || cpuSet.IsEmpty) ? Environment.ProcessorCount : cpuSet.Cpus.Length;
+            }
+
+            if (libuv)
+            {
+                System.Console.WriteLine($"Using Libuv: ThreadCount={threadCount}, UseTransportThread={tt}");
+            }
+            else
+            {
+                System.Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
             }
 
             var hostBuilder = new WebHostBuilder()
@@ -66,23 +107,21 @@ namespace SampleApp
 
             if (libuv)
             {
-                System.Console.WriteLine($"Using Libuv, ThreadCount={threadCount}");
                 hostBuilder = hostBuilder.UseLibuv(options => options.ThreadCount = threadCount);
             }
             else
             {
-                System.Console.WriteLine($"Using Linux Transport, ThreadCount={threadCount}");
                 hostBuilder = hostBuilder.UseLinuxTransport(options =>
                 {
                     options.ThreadCount = threadCount;
                     options.SetThreadAffinity = ta;
                     options.ReceiveOnIncomingCpu = ic;
                     options.DeferAccept = da;
+                    options.CpuSet = cpuSet;
                 });
             }
 
             var host = hostBuilder.Build();
-
             host.Run();
         }
     }

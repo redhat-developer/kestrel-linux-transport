@@ -130,7 +130,7 @@ namespace Tmds.Kestrel.Linux
 
         public override string ToString()
         {
-            return string.Join(",", _cpus);
+            return _cpus == null ? string.Empty : string.Join(",", _cpus);
         }
     }
 }
