@@ -3,9 +3,9 @@
 # Introduction
 
 The ASP.NET Core Kestrel webserver has been using libuv as a cross-platform network library.
-It is now possible to replace libuv with another implementation thanks to the `Transport` abstraction.
+It is possible to replace libuv with another implementation thanks to the `Transport` abstraction.
 
-In this repo we explore creating a Transport for Linux.
+In this repo we explore creating an experimental Transport for Linux.
 
 # CI
 
@@ -14,30 +14,30 @@ NuGet feed: `https://www.myget.org/F/tmds/api/v3/index.json`
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
-    <add key="Tmds.Kestrel.Linux" value="https://www.myget.org/F/tmds/api/v3/index.json" />
+    <add key="tmds" value="https://www.myget.org/F/tmds/api/v3/index.json" />
   </packageSources>
 </configuration>
 ```
 
-Dependency: `"Tmds.Kestrel.Linux": "0.1.0-*"`
+Dependency: `"RedHatX.AspNetCore.Server.Kestrel.Transport.Linux": "0.1.0-*"`
 
 # Repo structure
 
 There are 5 projects in this repository:
-- src/Tmds.Kestrel.Linux: managed library implementing Transport
-- src/Tmds.Kestrel.Linux.Native: native library used by managed library
+- src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux: managed library implementing Transport
+- src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Native: native library used by managed library
 - samples/KestrelSample: Kestrel app for [benchmarking](Benchmark.md)
-- test/Tmds.Kestrel.Linux.Test: xunit test projects, has access to internals of managed library
-- test/Tmds.Kestrel.Linux.TestApp: empty application to use during development, has access to internals of managed library
+- test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test: xunit test projects, has access to internals of managed library
+- test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.TestApp: empty application to use during development, has access to internals of managed library
 
-The library can be packaged by running the `dotnet pack` on src/Tmds.Kestrel.Linux.
+The library can be packaged by running the `dotnet pack` on src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.
 ```
-$ dotnet pack src/Tmds.Kestrel.Linux --configuration Release
+$ dotnet pack src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release
 ```
 
-To build the library and run the tests execute `dotnet test` on test/Tmds.Kestrel.Linux.Test.
+To build the library and run the tests execute `dotnet test` on test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test.
 ```
-$ dotnet test test/Tmds.Kestrel.Linux.Test
+$ dotnet test test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test
 ```
 
 # Design

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal;
 using Benchmarks.Middleware;
-using Tmds.Kestrel.Linux;
+using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 using System.Linq;
 
 namespace SampleApp

@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/Tmds.Kestrel.Linux/Tmds.Kestrel.Linux.csproj" />
+    <ProjectReference Include="../../src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel" Version="2.0.0-*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="1.1.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="1.1.1" />

@@ -17,12 +17,12 @@ before_install:
 - sudo ln -s /opt/dotnet/dotnet /usr/bin/dotnet
 script:
 - pushd samples/KestrelSample && dotnet restore && dotnet build && popd
-- pushd test/Tmds.Kestrel.Linux.Test && dotnet restore && dotnet test && popd
-- dotnet pack src/Tmds.Kestrel.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER"
+- pushd test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test && dotnet restore && dotnet test && popd
+- dotnet pack src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER"
   --output .
 after_success:
 - 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
-  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T Tmds.Kestrel.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg
+  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg
   https://www.myget.org/F/tmds/api/v2/package ; fi'
 
 env:
