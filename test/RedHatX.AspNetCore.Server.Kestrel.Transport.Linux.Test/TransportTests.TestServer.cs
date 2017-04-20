@@ -33,7 +33,6 @@ namespace Tests
             public IPipeReader Output { get; }
 
             // TODO: Remove these (Use Pipes instead?)
-            Task IConnectionContext.StopAsync() { throw new NotSupportedException(); }
             void IConnectionContext.Abort(Exception ex) { throw new NotSupportedException(); }
             void IConnectionContext.OnConnectionClosed() { throw new NotSupportedException(); }
         }
