@@ -120,7 +120,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             IScheduler IConnectionInformation.InputWriterScheduler => InlineScheduler.Default;
 
-            IScheduler IConnectionInformation.OutputReaderScheduler => ThreadContext;
+            IScheduler IConnectionInformation.OutputReaderScheduler => ThreadContext.SendScheduler;
         }
 
         struct ReadableAwaitable: ICriticalNotifyCompletion

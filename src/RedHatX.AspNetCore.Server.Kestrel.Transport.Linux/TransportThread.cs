@@ -319,7 +319,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             // objects are allocated on the PollThread heap
             int pipeKey;
-            var threadContext = new ThreadContext(this, _connectionHandler, CreateLogger());
+            var threadContext = new ThreadContext(this, _transportOptions, _connectionHandler, CreateLogger());
             {
                 // register pipe 
                 pipeKey = threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32();

@@ -12,7 +12,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     {
         sealed class ThreadContext : IScheduler
         {
-            public ThreadContext(TransportThread transportThread, IConnectionHandler connectionHandler, ILogger logger)
+            public ThreadContext(TransportThread transportThread, LinuxTransportOptions transportOptions, IConnectionHandler connectionHandler, ILogger logger)
             {
                 TransportThread = transportThread;
                 ConnectionHandler = connectionHandler;
@@ -26,11 +26,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
                 PipeEnds = PipeEnd.CreatePair(blocking: false);
                 _epollState = EPollBlocked;
+                SendScheduler = transportOptions.DeferSend ? this as IScheduler : InlineScheduler.Default;
             }
+
             public readonly EPoll EPoll;
             public readonly ILogger Logger;
             public readonly IConnectionHandler ConnectionHandler;
             public readonly PipeEndPair PipeEnds;
+            public readonly IScheduler SendScheduler;
 
             public readonly TransportThread TransportThread;
             // key is the file descriptor

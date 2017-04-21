@@ -66,7 +66,11 @@ This makes the kernel cpu that handles the socket match with the application cpu
 the NIC is configured to receive on multiple cpus using RSS. This option implies `SetThreadAffinity`.
 
 - **DeferAccept**: This uses the `TCP_DEFER_ACCEPT` socket option. Instead of being notified of a new connection when
-the TCP connection is set up, the application is notified when the connection was setup and data has arrived.
+the TCP connection is set up, the application is notified when the connection was setup and data has arrived. This options
+defaults to true.
+
+- **DeferSend**: This defers sends to the Transport Thread which increases chances for multiple sends to coalesce. This options
+defaults to true.
 
 - **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number processors in `CpuSet` when specified
 and the number of logical processors in the system otherwise.

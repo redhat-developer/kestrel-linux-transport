@@ -55,6 +55,7 @@ namespace SampleApp
                 System.Console.WriteLine("\tic       Receive on incoming cpu (implies ta)");
                 System.Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
                 System.Console.WriteLine("\tnoda     No deferred accept");
+                System.Console.WriteLine("\tnods     No deferred send");
                 return;
             }
 
@@ -66,6 +67,7 @@ namespace SampleApp
             bool libuv = args.Contains("libuv");
             bool ta = args.Contains("ta");
             bool ic = args.Contains("ic");
+            bool ds = !args.Contains("nods");
             bool da = !args.Contains("noda");
             bool tt = !args.Contains("nott");
             _log = args.Contains("log");
@@ -117,6 +119,7 @@ namespace SampleApp
                     options.SetThreadAffinity = ta;
                     options.ReceiveOnIncomingCpu = ic;
                     options.DeferAccept = da;
+                    options.DeferSend = ds;
                     options.CpuSet = cpuSet;
                 });
             }
