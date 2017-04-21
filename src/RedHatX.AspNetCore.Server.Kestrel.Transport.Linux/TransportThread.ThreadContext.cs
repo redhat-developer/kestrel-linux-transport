@@ -114,7 +114,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void StopSockets()
             {
-                PipeEnds.WriteEnd.WriteByte(PipeStopSockets);
+                try
+                {
+                    PipeEnds.WriteEnd.WriteByte(PipeStopSockets);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // All sockets stopped already and the PipeEnd was disposed
+                }
             }
 
             public void Dispose()
@@ -129,6 +136,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var sockets = Sockets;
                 lock (sockets)
                 {
+                    var initialCount = sockets.Count;
                     sockets.Remove(tsocketKey);
                     if (sockets.Count == 0)
                     {
