@@ -342,8 +342,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             var sockets = threadContext.Sockets;
 
             var acceptableSockets = new List<TSocket>(1);
-            var readableSockets = new List<TSocket>(1024);
-            var writableSockets = new List<TSocket>(1024);
+            var readableSockets = new List<TSocket>(EventBufferLength);
+            var writableSockets = new List<TSocket>(EventBufferLength);
             bool pipeReadable = false;
 
             bool running = true;
