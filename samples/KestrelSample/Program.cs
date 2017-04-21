@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Runtime;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -45,17 +46,17 @@ namespace SampleApp
         {
             if (args.Contains("--help"))
             {
-                System.Console.WriteLine("Options: [libuv] [-c<cpuset>] [-t<threadcount>] [ta] [ic] [noda] [nott]");
-                System.Console.WriteLine("  General:");
-                System.Console.WriteLine("\tlibuv    Use libuv Transport instead of Linux Transport");
-                System.Console.WriteLine("\t-t<tc>   Number of transport threads");
-                System.Console.WriteLine("\tnott     Defer requests to thread pool");
-                System.Console.WriteLine("  Linux transport specific:");
-                System.Console.WriteLine("\tta       Set thread affinity");
-                System.Console.WriteLine("\tic       Receive on incoming cpu (implies ta)");
-                System.Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
-                System.Console.WriteLine("\tnoda     No deferred accept");
-                System.Console.WriteLine("\tnods     No deferred send");
+                Console.WriteLine("Options: [libuv] [-c<cpuset>] [-t<threadcount>] [ta] [ic] [noda] [nott]");
+                Console.WriteLine("  General:");
+                Console.WriteLine("\tlibuv    Use libuv Transport instead of Linux Transport");
+                Console.WriteLine("\t-t<tc>   Number of transport threads");
+                Console.WriteLine("\tnott     Defer requests to thread pool");
+                Console.WriteLine("  Linux transport specific:");
+                Console.WriteLine("\tta       Set thread affinity");
+                Console.WriteLine("\tic       Receive on incoming cpu (implies ta)");
+                Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
+                Console.WriteLine("\tnoda     No deferred accept");
+                Console.WriteLine("\tnods     No deferred send");
                 return;
             }
 
@@ -94,13 +95,14 @@ namespace SampleApp
                 threadCount = (libuv || cpuSet.IsEmpty) ? Environment.ProcessorCount : cpuSet.Cpus.Length;
             }
 
+            Console.WriteLine($"Server GC is {(GCSettings.IsServerGC ? "enabled" : "disabled")}");
             if (libuv)
             {
-                System.Console.WriteLine($"Using Libuv: ThreadCount={threadCount}, UseTransportThread={tt}");
+                Console.WriteLine($"Using Libuv: ThreadCount={threadCount}, UseTransportThread={tt}");
             }
             else
             {
-                System.Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
+                Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
             }
 
             var hostBuilder = new WebHostBuilder()
