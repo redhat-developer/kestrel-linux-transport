@@ -29,6 +29,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private const int DupKeyMask          = 1 << 31;
         private const byte PipeStopThread     = 0;
         private const byte PipeActionsPending = 1;
+        private const byte PipeStopSockets    = 2;
 
         private struct ScheduledAction
         {
@@ -171,6 +172,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             TSocket tsocket = null;
+            var sockets = threadContext.Sockets;
             try
             {
                 tsocket = new TSocket(threadContext)
@@ -180,7 +182,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     Socket = acceptSocket
                 };
                 threadContext.AcceptSockets.Add(tsocket);
-                threadContext.Sockets.TryAdd(tsocket.Key, tsocket);
+                lock (sockets)
+                {
+                    sockets.Add(tsocket.Key, tsocket);
+                }
 
                 threadContext.EPoll.Control(EPollOperation.Add, acceptSocket, EPollEvents.Readable, new EPollData { Int1 = tsocket.Key, Int2 = tsocket.Key });
             }
@@ -188,7 +193,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 acceptSocket.Dispose();
                 threadContext.AcceptSockets.Remove(tsocket);
-                threadContext.Sockets.TryRemove(key, out tsocket);
+                lock (sockets)
+                {
+                    sockets.Remove(key);
+                }
                 throw;
             }
             endPoint.Port = port;
@@ -297,7 +305,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             if (triggerStateChange)
             {
-                _threadContext.Stop();
+                _threadContext.StopSockets();
             }
             await tcs.Task;
         }
@@ -325,70 +333,117 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             var epoll = threadContext.EPoll;
             var readEnd = threadContext.PipeEnds.ReadEnd;
-            bool notPacked = !EPoll.PackedEvents;
-            var buffer = stackalloc int[EventBufferLength * (notPacked ? 4 : 3)];
+            int notPacked = !EPoll.PackedEvents ? 1 : 0;
+            var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
             int statReadEvents = 0;
             int statWriteEvents = 0;
             int statAcceptEvents = 0;
             int statAccepts = 0;
             var sockets = threadContext.Sockets;
+
+            var acceptableSockets = new List<TSocket>(1);
+            var readableSockets = new List<TSocket>(1024);
+            var writableSockets = new List<TSocket>(1024);
+            bool pipeReadable = false;
+
             bool running = true;
             do
             {
                 int numEvents = epoll.Wait(buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite);
+
+                // actions can be scheduled without unblocking epoll
                 threadContext.SetEpollNotBlocked();
+
+                // check events, we don't handle them immediately to improve data&instruction locality
                 int* ptr = buffer;
-                for (int i = 0; i < numEvents; i++)
+                lock (sockets)
                 {
-                    //   Packed             Non-Packed
-                    //   ------             ------
-                    // 0:Events       ==    Events
-                    // 1:Int1 = Key         [Padding]
-                    // 2:Int2 = Key   ==    Int1 = Key
-                    // 3:~~~~~~~~~~         Int2 = Key
-                    //                      ~~~~~~~~~~
-                    int key = ptr[2];
-                    ptr += notPacked ? 4 : 3;
-                    TSocket tsocket;
-                    if (sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
+                    for (int i = 0; i < numEvents; i++)
                     {
-                        var type = tsocket.Flags & SocketFlags.TypeMask;
-                        if (type == SocketFlags.TypeClient)
+                        //   Packed             Non-Packed
+                        //   ------             ------
+                        // 0:Events       ==    Events
+                        // 1:Int1 = Key         [Padding]
+                        // 2:Int2 = Key   ==    Int1 = Key
+                        // 3:~~~~~~~~~~         Int2 = Key
+                        //                      ~~~~~~~~~~
+                        int key = ptr[2];
+                        ptr += 3 + notPacked;
+                        TSocket tsocket;
+                        if (sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
                         {
-                            bool read = (key & DupKeyMask) == 0;
-                            if (read)
+                            var type = tsocket.Flags & SocketFlags.TypeMask;
+                            if (type == SocketFlags.TypeClient)
                             {
-                                statReadEvents++;
-                                tsocket.CompleteReadable();
+                                bool read = (key & DupKeyMask) == 0;
+                                if (read)
+                                {
+                                    readableSockets.Add(tsocket);
+                                }
+                                else
+                                {
+                                    writableSockets.Add(tsocket);
+                                }
                             }
                             else
                             {
-                                statWriteEvents++;
-                                tsocket.CompleteWritable();
+                                statAcceptEvents++;
+                                acceptableSockets.Add(tsocket);
                             }
                         }
-                        else
+                        else if (key == pipeKey)
                         {
-                            statAcceptEvents++;
-                            statAccepts += HandleAccept(tsocket, threadContext);
+                            pipeReadable = true;
                         }
-                    }
-                    else if (key == pipeKey)
-                    {
-                        PosixResult result;
-                        do
-                        {
-                            result = readEnd.TryReadByte();
-                            if (result.Value == PipeStopThread)
-                            {
-                                StopSockets(threadContext.Sockets);
-                                running = false;
-                            }
-                        } while (result);
                     }
                 }
+
+                // handle accepts
+                statAcceptEvents += acceptableSockets.Count;
+                for (int i = 0; i < acceptableSockets.Count; i++)
+                {
+                    statAccepts += HandleAccept(acceptableSockets[i], threadContext);
+                }
+                acceptableSockets.Clear();
+
+                // handle writes
+                statWriteEvents += writableSockets.Count;
+                for (int i = 0; i < writableSockets.Count; i++)
+                {
+                    writableSockets[i].CompleteWritable();
+                }
+                writableSockets.Clear();
+
+                // handle reads
+                statReadEvents += readableSockets.Count;
+                for (int i = 0; i < readableSockets.Count; i++)
+                {
+                    readableSockets[i].CompleteReadable();
+                }
+                readableSockets.Clear();
+
+                // handle pipe
+                if (pipeReadable)
+                {
+                    PosixResult result;
+                    do
+                    {
+                        result = readEnd.TryReadByte();
+                        if (result.Value == PipeStopSockets)
+                        {
+                            StopSockets(threadContext.Sockets);
+                        }
+                        else if (result.Value == PipeStopThread)
+                        {
+                            running = false;
+                        }
+                    } while (result);
+                }
+
+                // scheduled work
                 threadContext.DoScheduledWork();
-            } while (running || sockets.Count != 0);
+
+            } while (running);
 
             threadContext.Logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents}");
 
@@ -433,7 +488,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 tsocket.PipeReader = connectionContext.Output;
                 tsocket.PipeWriter = connectionContext.Input;
 
-                threadContext.Sockets.TryAdd(key, tsocket);
+                var sockets = threadContext.Sockets;
+                lock (sockets)
+                {
+                    sockets.Add(key, tsocket);
+                }
 
                 WriteToSocket(tsocket, connectionContext.Output);
                 bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
@@ -727,8 +786,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var close = (previous & other) != 0;
                 if (close)
                 {
-                    TSocket removedSocket;
-                    tsocket.ThreadContext.Sockets.TryRemove(tsocket.Key, out removedSocket);
+                    tsocket.ThreadContext.RemoveSocket(tsocket.Key);
                     tsocket.Socket.Dispose();
                     tsocket.DupSocket?.Dispose();
                 }
@@ -746,22 +804,32 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private void CloseAccept(List<TSocket> acceptSockets, ConcurrentDictionary<int, TSocket> sockets)
+        private void CloseAccept(ThreadContext threadContext, Dictionary<int, TSocket> sockets)
         {
-            foreach (var acceptSocket in acceptSockets)
+            var acceptSockets = threadContext.AcceptSockets;
+            lock (sockets)
             {
-                TSocket removedSocket;
-                sockets.TryRemove(acceptSocket.Key, out removedSocket);
+                for (int i = 0; i < acceptSockets.Count; i++)
+                {
+                    threadContext.RemoveSocket(acceptSockets[i].Key);
+                }
+            }
+            for (int i = 0; i < acceptSockets.Count; i++)
+            {
                 // close causes remove from epoll (CLOEXEC)
-                acceptSocket.Socket.Dispose(); // will close (no concurrent users)
+                acceptSockets[i].Socket.Dispose(); // will close (no concurrent users)
             }
             acceptSockets.Clear();
             CompleteStateChange(State.AcceptClosed);
         }
 
-        private static void StopSockets(ConcurrentDictionary<int, TSocket> sockets)
+        private static void StopSockets(Dictionary<int, TSocket> sockets)
         {
-            var clone = new Dictionary<int, TSocket>(sockets);
+            Dictionary<int, TSocket> clone;
+            lock (sockets)
+            {
+                clone = new Dictionary<int, TSocket>(sockets);
+            }
             foreach (var kv in clone)
             {
                 var tsocket = kv.Value;
@@ -786,7 +854,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _stateChangeCompletion = null;
                 _state = state;
             }
-            ThreadPool.QueueUserWorkItem(o => tcs.SetResult(null));
+            ThreadPool.QueueUserWorkItem(o => tcs?.SetResult(null));
         }
     }
 }

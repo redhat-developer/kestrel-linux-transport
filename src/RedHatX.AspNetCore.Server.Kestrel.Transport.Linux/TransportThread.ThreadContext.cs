@@ -17,7 +17,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 TransportThread = transportThread;
                 ConnectionHandler = connectionHandler;
 
-                Sockets = new ConcurrentDictionary<int, TSocket>();
+                Sockets = new Dictionary<int, TSocket>();
                 EPoll = EPoll.Create();
                 PipeFactory = new PipeFactory();
                 Logger = logger;
@@ -34,7 +34,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public readonly TransportThread TransportThread;
             // key is the file descriptor
-            public readonly ConcurrentDictionary<int, TSocket> Sockets;
+            public readonly Dictionary<int, TSocket> Sockets;
             public readonly PipeFactory PipeFactory;
             public readonly List<TSocket> AcceptSockets;
 
@@ -105,13 +105,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 (this as IScheduler).Schedule(() =>
                 {
-                    this.TransportThread.CloseAccept(AcceptSockets, Sockets);
+                    this.TransportThread.CloseAccept(this, Sockets);
                 });
             }
 
-            public void Stop()
+            public void StopSockets()
             {
-                PipeEnds.WriteEnd.WriteByte(PipeStopThread);
+                PipeEnds.WriteEnd.WriteByte(PipeStopSockets);
             }
 
             public void Dispose()
@@ -119,6 +119,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 EPoll?.Dispose();
                 PipeEnds.Dispose();
                 PipeFactory?.Dispose();
+            }
+
+            public void RemoveSocket(int tsocketKey)
+            {
+                var sockets = Sockets;
+                lock (sockets)
+                {
+                    sockets.Remove(tsocketKey);
+                    if (sockets.Count == 0)
+                    {
+                        PipeEnds.WriteEnd.WriteByte(PipeStopThread);
+                    }
+                }
             }
         }
     }
