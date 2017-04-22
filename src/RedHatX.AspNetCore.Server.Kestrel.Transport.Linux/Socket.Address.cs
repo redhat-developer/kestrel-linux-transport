@@ -43,16 +43,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             if (Family == AddressFamily.InterNetwork)
             {
-                const int length = 4;
-                var bytes = new byte[length];
+                long value;
                 fixed (byte* address = Address)
                 {
-                    for (int i = 0; i < length; i++)
-                    {
-                        bytes[i] = address[i];
-                    }
+                    value = ((address[3] << 24 | address[2] << 16 | address[1] << 8 | address[0]) & 0x0FFFFFFFF);
                 }
-                return new IPEndPoint(new IPAddress(bytes), Port);
+                return new IPEndPoint(new IPAddress(value), Port);
             }
             else if (Family == AddressFamily.InterNetworkV6)
             {
