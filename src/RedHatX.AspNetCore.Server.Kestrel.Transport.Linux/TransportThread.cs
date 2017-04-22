@@ -487,6 +487,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var connectionContext = threadContext.ConnectionHandler.OnConnection(tsocket);
                 tsocket.PipeReader = connectionContext.Output;
                 tsocket.PipeWriter = connectionContext.Input;
+                tsocket.ConnectionContext = connectionContext;
 
                 var sockets = threadContext.Sockets;
                 lock (sockets)
@@ -675,6 +676,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             catch (Exception ex)
             {
+                tsocket.ConnectionContext.Abort(ex);
                 writer.Complete(ex);
             }
             finally
@@ -789,6 +791,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     tsocket.ThreadContext.RemoveSocket(tsocket.Key);
                     tsocket.Socket.Dispose();
                     tsocket.DupSocket?.Dispose();
+
+                    tsocket.ConnectionContext.OnConnectionClosed();
                 }
                 else
                 {

@@ -61,6 +61,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public IPipeWriter PipeWriter;
             public IPEndPoint  PeerAddress;
             public IPEndPoint  LocalAddress;
+            public IConnectionContext ConnectionContext;
 
             private Action _writableCompletion;
             public bool SetWritableContinuation(Action continuation)
