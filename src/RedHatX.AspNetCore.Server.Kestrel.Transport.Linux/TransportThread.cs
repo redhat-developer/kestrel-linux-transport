@@ -354,7 +354,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // actions can be scheduled without unblocking epoll
                 threadContext.SetEpollNotBlocked();
 
-                // check events, we don't handle them immediately to improve data&instruction locality
+                // check events
+                // we don't handle them immediately:
+                // - this ensures we don't mismatch a closed socket with a new socket that have the same fd
+                //     ~ To have the same fd, the previous fd must be closed, which means it is removed from the epoll
+                //     ~ and won't show up in our next call to epoll.Wait.
+                //     ~ The old fd may be present in the buffer still, but lookup won't give a match, since it is removed
+                //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
+                // - this also improves cache/cpu locality of the lookup
                 int* ptr = buffer;
                 lock (sockets)
                 {
