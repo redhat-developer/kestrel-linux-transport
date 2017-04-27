@@ -32,7 +32,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 ThreadContext = threadContext;
             }
-            private static readonly Action _canceledSentinel = delegate { };
+            private static readonly Action _stopSentinel = delegate { };
 
             private int _flags;
             public SocketFlags Flags
@@ -70,22 +70,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return oldValue == null;
             }
 
-            public bool IsWriteCancelled() => ReferenceEquals(_writableCompletion, _canceledSentinel);
-
-            public void CancelWritable()
-            {
-                Action continuation = Interlocked.Exchange(ref _writableCompletion, _canceledSentinel);
-                continuation?.Invoke();
-            }
+            public bool IsWritable() => !ReferenceEquals(_writableCompletion, _stopSentinel);
 
             public void CompleteWritable()
             {
-                Action continuation = Volatile.Read(ref _writableCompletion);
-                if (!ReferenceEquals(continuation, _canceledSentinel))
-                {
-                    Volatile.Write(ref _writableCompletion, null);
-                    continuation.Invoke();
-                }
+                Action continuation = Interlocked.Exchange(ref _writableCompletion, null);
+                continuation.Invoke();
+            }
+
+            public void StopWriteToSocket()
+            {
+                PipeReader.CancelPendingRead();
+                // unblock Writable (may race with CompleteWritable)
+                Action continuation = Interlocked.Exchange(ref _writableCompletion, _stopSentinel);
+                continuation?.Invoke();
             }
 
             private Action _readableCompletion;
@@ -95,22 +93,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return oldValue == null;
             }
 
-            public bool IsReadCancelled() => ReferenceEquals(_readableCompletion, _canceledSentinel);
-
-            public void CancelReadable()
-            {
-                Action continuation = Interlocked.Exchange(ref _readableCompletion, _canceledSentinel);
-                continuation?.Invoke();
-            }
+            public bool IsReadable() => !ReferenceEquals(_readableCompletion, _stopSentinel);
 
             public void CompleteReadable()
             {
-                Action continuation = Volatile.Read(ref _readableCompletion);
-                if (!ReferenceEquals(continuation, _canceledSentinel))
-                {
-                    Volatile.Write(ref _readableCompletion, null);
-                    continuation.Invoke();
-                }
+                Action continuation = Interlocked.Exchange(ref _readableCompletion, null);
+                continuation.Invoke();
+            }
+
+            public void StopReadFromSocket()
+            {
+                PipeWriter.CancelPendingFlush();
+                // unblock Readable (may race with CompleteReadable)
+                Action continuation = Interlocked.Exchange(ref _readableCompletion, _stopSentinel);
+                continuation?.Invoke();
             }
 
             IPEndPoint IConnectionInformation.RemoteEndPoint => PeerAddress;
@@ -135,7 +131,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public bool IsCompleted => false;
 
-            public bool GetResult() => !_tsocket.IsReadCancelled();
+            public bool GetResult() => _tsocket.IsReadable();
 
             public ReadableAwaitable GetAwaiter() => this;
 
@@ -165,7 +161,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public bool IsCompleted => false;
 
-            public bool GetResult() => !_tsocket.IsWriteCancelled();
+            public bool GetResult() => _tsocket.IsWritable();
 
             public WritableAwaitable GetAwaiter() => this;
 

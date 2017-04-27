@@ -142,6 +142,28 @@ namespace Tests
         }
 
         [Fact]
+        public async Task CompletingOutputCompletesInput()
+        {
+            var inputCompletedTcs = new TaskCompletionSource<object>();
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            {
+                output.Complete();
+                var readResult = await input.ReadAsync();
+                Assert.True(readResult.IsCompleted || readResult.IsCancelled);
+                inputCompletedTcs.SetResult(null);
+            };
+
+            using (var testServer = new TestServer(connectionHandler))
+            {
+                await testServer.BindAsync();
+                using (var client = testServer.ConnectTo())
+                {
+                    await inputCompletedTcs.Task;
+                }
+            }
+        }
+
+        [Fact]
         public async Task Receive()
         {
             // client send 1M bytes which are an int counter

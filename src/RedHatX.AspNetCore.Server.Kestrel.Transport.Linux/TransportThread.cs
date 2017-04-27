@@ -565,6 +565,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             finally
             {
+                tsocket.StopReadFromSocket();
+
                 CleanupSocket(tsocket, SocketShutdown.Send);
             }
         }
@@ -774,44 +776,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             } while (true);
         }
 
-         private static void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
+        private static void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
         {
-            // One caller will end up calling Shutdown, the other will call Dispose.
-            // To ensure the Shutdown is executed against an open file descriptor
-            // we manually increment/decrement the refcount on the safehandle.
-            // We need to use a CER (Constrainted Execution Region) to ensure
-            // the refcount is decremented.
-
-            // This isn't available in .NET Core 1.x
-            // RuntimeHelpers.PrepareConstrainedRegions();
-            try
-            { }
-            finally
+            var oldFlags = tsocket.AddFlags(shutdown == SocketShutdown.Send ? SocketFlags.ShutdownSend : SocketFlags.ShutdownReceive);
+            var other = shutdown == SocketShutdown.Send ? SocketFlags.ShutdownReceive : SocketFlags.ShutdownSend;
+            var close = (oldFlags & other) != 0;
+            if (close)
             {
-                bool releaseRef = false;
-                tsocket.Socket.DangerousAddRef(ref releaseRef);
-                var previous = tsocket.AddFlags(shutdown == SocketShutdown.Send ? SocketFlags.ShutdownSend : SocketFlags.ShutdownReceive);
-                var other = shutdown == SocketShutdown.Send ? SocketFlags.ShutdownReceive : SocketFlags.ShutdownSend;
-                var close = (previous & other) != 0;
-                if (close)
-                {
-                    tsocket.ThreadContext.RemoveSocket(tsocket.Key);
-                    tsocket.Socket.Dispose();
-                    tsocket.DupSocket?.Dispose();
+                tsocket.ThreadContext.RemoveSocket(tsocket.Key);
+                tsocket.Socket.Dispose();
+                tsocket.DupSocket?.Dispose();
 
-                    tsocket.ConnectionContext.OnConnectionClosed();
-                }
-                else
-                {
-                    tsocket.Socket.TryShutdown(shutdown);
-                }
-                // when CleanupSocket finished for both ends
-                // the close will be invoked by the next statement
-                // causing removal from the epoll
-                if (releaseRef)
-                {
-                    tsocket.Socket.DangerousRelease();
-                }
+                tsocket.ConnectionContext.OnConnectionClosed();
             }
         }
 
@@ -844,10 +820,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             foreach (var kv in clone)
             {
                 var tsocket = kv.Value;
-                tsocket.PipeReader.CancelPendingRead();
-                tsocket.PipeWriter.CancelPendingFlush();
-                tsocket.CancelReadable();
-                tsocket.CancelWritable();
+                tsocket.StopWriteToSocket();
+                // this calls StopReadFromSocket
             }
         }
 
