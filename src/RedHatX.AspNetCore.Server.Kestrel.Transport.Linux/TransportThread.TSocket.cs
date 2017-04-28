@@ -54,7 +54,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             public ThreadContext ThreadContext;
-            public int         Key;
+            public int         Fd;
             public Socket      Socket;
             public Socket      DupSocket;
             public IPipeReader PipeReader;

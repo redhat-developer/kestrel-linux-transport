@@ -122,14 +122,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private static void AcceptOn(IPEndPoint endPoint, int cpuId, LinuxTransportOptions transportOptions, ThreadContext threadContext)
         {
             Socket acceptSocket = null;
-            int key = 0;
+            int fd = 0;
             int port = endPoint.Port;
             SocketFlags flags = SocketFlags.TypeAccept;
             try
             {
                 bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
                 acceptSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false);
-                key = acceptSocket.DangerousGetHandle().ToInt32();
+                fd = acceptSocket.DangerousGetHandle().ToInt32();
                 if (!ipv4)
                 {
                     // Don't do mapped ipv4
@@ -178,16 +178,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 tsocket = new TSocket(threadContext)
                 {
                     Flags = flags,
-                    Key = key,
+                    Fd = fd,
                     Socket = acceptSocket
                 };
                 threadContext.AcceptSockets.Add(tsocket);
                 lock (sockets)
                 {
-                    sockets.Add(tsocket.Key, tsocket);
+                    sockets.Add(tsocket.Fd, tsocket);
                 }
 
-                threadContext.EPoll.Control(EPollOperation.Add, acceptSocket, EPollEvents.Readable, new EPollData { Int1 = tsocket.Key, Int2 = tsocket.Key });
+                EPollInterop.EPollControl(threadContext.EPollFd,
+                                          EPollOperation.Add,
+                                          fd,
+                                          EPollEvents.Readable,
+                                          EPollData(fd));
             }
             catch
             {
@@ -195,7 +199,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 threadContext.AcceptSockets.Remove(tsocket);
                 lock (sockets)
                 {
-                    sockets.Remove(key);
+                    sockets.Remove(fd);
                 }
                 throw;
             }
@@ -323,7 +327,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 // register pipe 
                 pipeKey = threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
-                threadContext.EPoll.Control(EPollOperation.Add, threadContext.PipeEnds.ReadEnd, EPollEvents.Readable, new EPollData { Int1 = pipeKey, Int2 = pipeKey });
+                EPollInterop.EPollControl(threadContext.EPollFd,
+                                          EPollOperation.Add,
+                                          threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
+                                          EPollEvents.Readable,
+                                          EPollData(pipeKey));
                 // accept connections
                 AcceptOn(_endPoint, _cpuId, _transportOptions, threadContext);
 
@@ -331,7 +339,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 CompleteStateChange(State.Started);
             }
 
-            var epoll = threadContext.EPoll;
+            int epollFd = threadContext.EPollFd;
             var readEnd = threadContext.PipeEnds.ReadEnd;
             int notPacked = !EPoll.PackedEvents ? 1 : 0;
             var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
@@ -349,7 +357,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             bool running = true;
             do
             {
-                int numEvents = epoll.Wait(buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite);
+                int numEvents = EPollInterop.EPollWait(epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
 
                 // actions can be scheduled without unblocking epoll
                 threadContext.SetEpollNotBlocked();
@@ -445,6 +453,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             running = false;
                         }
                     } while (result);
+                    pipeReadable = false;
                 }
 
                 // scheduled work
@@ -454,6 +463,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             threadContext.Logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents}");
 
+            // We are not using SafeHandles for epoll to increase performance.
+            // running == false when there are no more Sockets
+            // so we are sure there are no more epoll users.
             threadContext.Dispose();
 
             CompleteStateChange(State.Stopped);
@@ -468,16 +480,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             var result = tacceptSocket.Socket.TryAccept(out clientSocket, blocking: false);
             if (result.IsSuccess)
             {
-                int key;
+                int fd;
                 TSocket tsocket;
                 try
                 {
-                    key = clientSocket.DangerousGetHandle().ToInt32();
+                    fd = clientSocket.DangerousGetHandle().ToInt32();
 
                     tsocket = new TSocket(threadContext)
                     {
                         Flags = SocketFlags.TypeClient,
-                        Key = key,
+                        Fd = fd,
                         Socket = clientSocket,
                         PeerAddress = clientSocket.GetPeerIPAddress(),
                         LocalAddress = clientSocket.GetLocalIPAddress()
@@ -499,7 +511,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var sockets = threadContext.Sockets;
                 lock (sockets)
                 {
-                    sockets.Add(key, tsocket);
+                    sockets.Add(fd, tsocket);
                 }
 
                 WriteToSocket(tsocket, connectionContext.Output);
@@ -532,7 +544,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         if (!buffer.IsEmpty)
                         {
-                            var result = TrySend(tsocket.Socket, ref buffer);
+                            var result = TrySend(tsocket.Fd, ref buffer);
                             if (result.IsSuccess && result.Value != 0)
                             {
                                 end = result.Value == buffer.Length ? buffer.End : buffer.Move(buffer.Start, result.Value);
@@ -571,7 +583,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe PosixResult TrySend(Socket socket, ref ReadableBuffer buffer)
+        private static unsafe PosixResult TrySend(int fd, ref ReadableBuffer buffer)
         {
             int ioVectorLength = 0;
             foreach (var memory in buffer)
@@ -611,14 +623,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     break;
                 }
             }
-            return socket.TrySend(ioVectors, ioVectorLength);
+            return SocketInterop.Send(fd, ioVectors, ioVectorLength);
         }
 
         private static WritableAwaitable Writable(TSocket tsocket) => new WritableAwaitable(tsocket);
 
         private static void RegisterForWritable(TSocket tsocket)
         {
-            var epoll = tsocket.ThreadContext.EPoll;
             bool registered = tsocket.DupSocket != null;
             // To avoid having to synchronize the event mask with the Readable
             // we dup the socket.
@@ -628,26 +639,28 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 tsocket.DupSocket = tsocket.Socket.Duplicate();
             }
-            epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
-                            tsocket.DupSocket,
-                            EPollEvents.Writable | EPollEvents.OneShot,
-                            new EPollData{ Int1 = tsocket.Key | DupKeyMask, Int2 = tsocket.Key | DupKeyMask } );
+            EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
+                                      registered ? EPollOperation.Modify : EPollOperation.Add,
+                                      tsocket.DupSocket.DangerousGetHandle().ToInt32(),
+                                      EPollEvents.Writable | EPollEvents.OneShot,
+                                      EPollData(tsocket.Fd | DupKeyMask));
         }
+
 
         private static ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket);
 
         private static void RegisterForReadable(TSocket tsocket)
         {
-            var epoll = tsocket.ThreadContext.EPoll;
             bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
             if (!registered)
             {
                 tsocket.AddFlags(SocketFlags.EPollRegistered);
             }
-            epoll.Control(registered ? EPollOperation.Modify : EPollOperation.Add,
-                tsocket.Socket,
-                EPollEvents.Readable | EPollEvents.OneShot,
-                new EPollData{ Int1 = tsocket.Key, Int2 = tsocket.Key });
+            EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
+                                      registered ? EPollOperation.Modify : EPollOperation.Add,
+                                      tsocket.Fd,
+                                      EPollEvents.Readable | EPollEvents.OneShot,
+                                      EPollData(tsocket.Fd));
         }
 
         private static async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
@@ -671,7 +684,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     var buffer = writer.Alloc(2048);
                     try
                     {
-                        Receive(tsocket.Socket, availableBytes, ref buffer);
+                        Receive(tsocket.Fd, availableBytes, ref buffer);
                         availableBytes = 0;
                         var flushResult = await buffer.FlushAsync();
                         bool readable = true;
@@ -710,7 +723,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe void Receive(Socket socket, int availableBytes, ref WritableBuffer wb)
+        private static unsafe void Receive(int fd, int availableBytes, ref WritableBuffer wb)
         {
             int ioVectorLength = availableBytes <= wb.Buffer.Length ? 1 :
                     Math.Min(1 + (availableBytes - wb.Buffer.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
@@ -755,7 +768,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             var received = 0;
             do
             {
-                var result = socket.TryReceive(ioVectors, ioVectorsUsed);
+                var result = SocketInterop.Receive(fd, ioVectors, ioVectorsUsed);
                 if (result.IsSuccess)
                 {
                     received += result.Value;
@@ -799,7 +812,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             var close = (oldFlags & other) != 0;
             if (close)
             {
-                tsocket.ThreadContext.RemoveSocket(tsocket.Key);
+                // First remove from the Dictionary, so we can't match with a new fd.
+                tsocket.ThreadContext.RemoveSocket(tsocket.Fd);
+
+                // We are not using SafeHandles to increase performance.
+                // We get here when both reading and writing has stopped
+                // so we are sure this is the last use of the Socket.
                 tsocket.Socket.Dispose();
                 tsocket.DupSocket?.Dispose();
 
@@ -814,7 +832,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 for (int i = 0; i < acceptSockets.Count; i++)
                 {
-                    threadContext.RemoveSocket(acceptSockets[i].Key);
+                    threadContext.RemoveSocket(acceptSockets[i].Fd);
                 }
             }
             for (int i = 0; i < acceptSockets.Count; i++)
@@ -857,5 +875,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             ThreadPool.QueueUserWorkItem(o => tcs?.SetResult(null));
         }
+
+        private static long EPollData(int fd) => (((long)(uint)fd) << 32) | (long)(uint)fd;
     }
 }

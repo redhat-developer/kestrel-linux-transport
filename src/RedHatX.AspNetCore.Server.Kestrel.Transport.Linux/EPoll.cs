@@ -11,15 +11,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public static extern PosixResult EPollCreate(out EPoll epoll);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_EPollWait")]
-        public static unsafe extern PosixResult EPollWait(EPoll epoll, void* events, int maxEvents, int timeout);
+        public static unsafe extern PosixResult EPollWait(int epoll, void* events, int maxEvents, int timeout);
+        public static unsafe PosixResult EPollWait(EPoll epoll, void* events, int maxEvents, int timeout)
+        => EPollWait(epoll.DangerousGetHandle().ToInt32(), events, maxEvents, timeout);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_EPollControl")]
-        public static extern PosixResult EPollControl(EPoll epoll, EPollOperation operation, SafeHandle fd, EPollEvents events, long data);
+        public static extern PosixResult EPollControl(int epoll, EPollOperation operation, int fd, EPollEvents events, long data);
+        public static PosixResult EPollControl(EPoll epoll, EPollOperation operation, SafeHandle fd, EPollEvents events, long data)
+        => EPollControl(epoll.DangerousGetHandle().ToInt32(), operation, fd.DangerousGetHandle().ToInt32(), events, data);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_SizeOfEPollEvent")]
         public static extern int SizeOfEPollEvent();
     }
 
+    // Warning: Some operations use DangerousGetHandle for increased performance
     class EPoll : CloseSafeHandle
     {
         private static bool s_packedEvents = false;

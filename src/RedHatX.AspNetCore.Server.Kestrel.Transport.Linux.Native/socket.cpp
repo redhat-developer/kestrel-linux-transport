@@ -51,8 +51,8 @@ extern "C"
     PosixResult RHXKL_Listen(intptr_t socket, int backlog);
     PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, intptr_t* acceptedSocket);
     PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown);
-    PosixResult RHXKL_Send(intptr_t handle, IOVector* ioVectors, int ioVectorLen);
-    PosixResult RHXKL_Receive(intptr_t handle, IOVector* ioVectors, int ioVectorLen);
+    PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen);
+    PosixResult RHXKL_Receive(int socket, IOVector* ioVectors, int ioVectorLen);
     PosixResult RHXKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
     PosixResult RHXKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen);
     PosixResult RHXKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
@@ -816,7 +816,7 @@ PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown)
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Send(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
+PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen)
 {
     if (ioVectors == nullptr || ioVectorLen <= 0)
     {
@@ -825,7 +825,6 @@ PosixResult RHXKL_Send(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
 
     // TODO: check we don't' send more than INT_MAX byte because we are returning an int
 
-    int fd = ToFileDescriptor(handle);
     msghdr header =
     {
         .msg_name = nullptr,
@@ -843,7 +842,7 @@ PosixResult RHXKL_Send(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Receive(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
+PosixResult RHXKL_Receive(int fd, IOVector* ioVectors, int ioVectorLen)
 {
     if (ioVectors == nullptr || ioVectorLen <= 0)
     {
@@ -852,7 +851,6 @@ PosixResult RHXKL_Receive(intptr_t handle, IOVector* ioVectors, int ioVectorLen)
 
     // TODO: check we don't' send more than INT_MAX byte because we are returning an int
 
-    int fd = ToFileDescriptor(handle);
     msghdr header =
     {
         .msg_name = nullptr,

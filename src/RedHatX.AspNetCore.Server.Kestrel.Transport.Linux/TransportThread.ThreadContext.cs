@@ -19,6 +19,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                 Sockets = new Dictionary<int, TSocket>();
                 EPoll = EPoll.Create();
+                EPollFd = EPoll.DangerousGetHandle().ToInt32();
                 PipeFactory = new PipeFactory();
                 Logger = logger;
                 AcceptSockets = new List<TSocket>();
@@ -29,7 +30,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 SendScheduler = transportOptions.DeferSend ? this as IScheduler : InlineScheduler.Default;
             }
 
-            public readonly EPoll EPoll;
+            public readonly int EPollFd;
             public readonly ILogger Logger;
             public readonly IConnectionHandler ConnectionHandler;
             public readonly PipeEndPair PipeEnds;
@@ -41,6 +42,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly PipeFactory PipeFactory;
             public readonly List<TSocket> AcceptSockets;
 
+            private readonly EPoll EPoll;
             private int _epollState;
             private readonly object _schedulerGate = new object();
             private Queue<ScheduledAction> _schedulerAdding;
