@@ -142,15 +142,23 @@ namespace Tests
         }
 
         [Fact]
-        public async Task CompletingOutputCompletesInput()
+        public async Task CompletingOutputCancelsInput()
         {
             var inputCompletedTcs = new TaskCompletionSource<object>();
             TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
                 output.Complete();
-                var readResult = await input.ReadAsync();
-                Assert.True(readResult.IsCompleted || readResult.IsCancelled);
-                inputCompletedTcs.SetResult(null);
+                bool expectedException = false;
+                try
+                {
+                    await input.ReadAsync();
+                }
+                catch (TaskCanceledException)
+                {
+                    expectedException = true;
+                    inputCompletedTcs.SetResult(null);
+                }
+                Assert.True(expectedException);
             };
 
             using (var testServer = new TestServer(connectionHandler))

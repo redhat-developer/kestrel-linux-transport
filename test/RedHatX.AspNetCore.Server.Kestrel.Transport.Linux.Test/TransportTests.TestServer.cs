@@ -113,25 +113,31 @@ namespace Tests
 
         public static async void Echo(IPipeReader input, IPipeWriter output)
         {
-            while (true)
+            try
             {
-                var result = await input.ReadAsync();
-                var request = result.Buffer;
-
-                if (request.IsEmpty && result.IsCompleted)
+                while (true)
                 {
-                    input.Advance(request.End);
-                    break;
-                }
+                    var result = await input.ReadAsync();
+                    var request = result.Buffer;
 
-                int len = request.Length;
-                var response = output.Alloc();
-                response.Append(request);
-                await response.FlushAsync();
-                input.Advance(request.End);
+                    if (request.IsEmpty && result.IsCompleted)
+                    {
+                        input.Advance(request.End);
+                        break;
+                    }
+
+                    int len = request.Length;
+                    var response = output.Alloc();
+                    response.Append(request);
+                    await response.FlushAsync();
+                    input.Advance(request.End);
+                }
             }
-            input.Complete();
-            output.Complete();
+            catch
+            {
+                input.Complete();
+                output.Complete();
+            }
         }
 
         public Socket ConnectTo()

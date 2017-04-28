@@ -654,11 +654,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             try
             {
+                Exception error = null;
                 var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
+                bool readable0 = true;
                 if (availableBytes == 0
-                 && await Readable(tsocket)) // Readable
+                 && (readable0 = await Readable(tsocket))) // Readable
                 {
                     availableBytes = tsocket.Socket.GetAvailableBytes();
+                }
+                else if (!readable0)
+                {
+                    error = new TaskCanceledException("The request was aborted");
                 }
                 while (availableBytes != 0)
                 {
@@ -668,20 +674,30 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         Receive(tsocket.Socket, availableBytes, ref buffer);
                         availableBytes = 0;
                         var flushResult = await buffer.FlushAsync();
+                        bool readable = true;
                         if (!flushResult.IsCompleted // Reader hasn't stopped
                          && !flushResult.IsCancelled // TransportThread hasn't stopped
-                         && await Readable(tsocket)) // Readable
+                         && (readable = await Readable(tsocket))) // Readable
                         {
                             availableBytes = tsocket.Socket.GetAvailableBytes();
                         }
+                        else if (flushResult.IsCancelled || !readable)
+                        {
+                            error = new TaskCanceledException("The request was aborted");
+                        }
                     }
-                    catch
+                    catch (Exception e)
                     {
                         buffer.Commit();
-                        throw;
+                        error = e;
                     }
                 }
-                writer.Complete();
+
+                // even when error == null, we call Abort
+                // this mean receiving FIN causes Abort
+                // rationale: https://github.com/aspnet/KestrelHttpServer/issues/1139#issuecomment-251748845
+                tsocket.ConnectionContext.Abort(error);
+                writer.Complete(error);
             }
             catch (Exception ex)
             {
