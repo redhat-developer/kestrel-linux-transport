@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Net;
 using System.Runtime;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
@@ -11,6 +12,7 @@ using Microsoft.Extensions.Logging.Console;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal;
 using Benchmarks.Middleware;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using System.Linq;
 
 namespace SampleApp
@@ -106,7 +108,10 @@ namespace SampleApp
             }
 
             var hostBuilder = new WebHostBuilder()
-                .UseKestrel(options => options.UseTransportThread = tt)
+                .UseKestrel(options =>
+                {
+                    options.ApplicationSchedulingMode = tt ? SchedulingMode.Inline : SchedulingMode.ThreadPool;
+                })
                 .UseStartup<Startup>();
 
             if (libuv)
