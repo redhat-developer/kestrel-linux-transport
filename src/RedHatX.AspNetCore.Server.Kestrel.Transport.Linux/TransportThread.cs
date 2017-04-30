@@ -528,6 +528,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static async void WriteToSocket(TSocket tsocket, IPipeReader reader)
         {
+            Exception error = null;
             try
             {
                 while (true)
@@ -559,7 +560,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             }
                             else
                             {
-                                result.ThrowOnError();
+                                error = new PosixException(result.Value);
+                                break;
                             }
                         }
                     }
@@ -569,14 +571,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         reader.Advance(end);
                     }
                 }
-                reader.Complete();
             }
             catch (Exception ex)
             {
-                reader.Complete(ex);
+                error = ex;
             }
             finally
             {
+                tsocket.ConnectionContext.OnConnectionClosed(error);
+                reader.Complete(error);
+
                 tsocket.StopReadFromSocket();
 
                 CleanupSocket(tsocket, SocketShutdown.Send);
@@ -665,9 +669,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
         {
+            Exception error = null;
             try
             {
-                Exception error = null;
                 var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
                 bool readable0 = true;
                 if (availableBytes == 0
@@ -701,24 +705,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     catch (Exception e)
                     {
+                        availableBytes = 0;
                         buffer.Commit();
                         error = e;
                     }
                 }
-
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+            finally
+            {
                 // even when error == null, we call Abort
                 // this mean receiving FIN causes Abort
                 // rationale: https://github.com/aspnet/KestrelHttpServer/issues/1139#issuecomment-251748845
                 tsocket.ConnectionContext.Abort(error);
                 writer.Complete(error);
-            }
-            catch (Exception ex)
-            {
-                tsocket.ConnectionContext.Abort(ex);
-                writer.Complete(ex);
-            }
-            finally
-            {
+
                 CleanupSocket(tsocket, SocketShutdown.Receive);
             }
         }
@@ -820,8 +824,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // so we are sure this is the last use of the Socket.
                 tsocket.Socket.Dispose();
                 tsocket.DupSocket?.Dispose();
-
-                tsocket.ConnectionContext.OnConnectionClosed();
             }
         }
 

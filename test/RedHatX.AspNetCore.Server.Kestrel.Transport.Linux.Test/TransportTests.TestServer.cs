@@ -34,7 +34,7 @@ namespace Tests
 
             // TODO: Remove these (Use Pipes instead?)
             void IConnectionContext.Abort(Exception ex) { }
-            void IConnectionContext.OnConnectionClosed() { }
+            void IConnectionContext.OnConnectionClosed(Exception ex) { }
         }
 
         private Transport _transport;

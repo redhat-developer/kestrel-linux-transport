@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
+using Tmds.Posix;
 using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -120,10 +121,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     PipeEnds.WriteEnd.WriteByte(PipeStopSockets);
                 }
+                // All sockets stopped already and the PipeEnd was disposed
+                catch (PosixException ex) when (ex.Error == PosixResult.EPIPE)
+                {}
                 catch (ObjectDisposedException)
-                {
-                    // All sockets stopped already and the PipeEnd was disposed
-                }
+                {}
             }
 
             public void Dispose()
