@@ -55,6 +55,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private readonly object _gate = new object();
         private int _cpuId;
         private State _state;
+        private Exception _failReason;
         private Thread _thread;
         private TaskCompletionSource<object> _stateChangeCompletion;
         private ThreadContext _threadContext;
@@ -95,20 +96,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     tcs = _stateChangeCompletion = new TaskCompletionSource<object>();
                     _state = State.Starting;
 
-                    // child will inherit parent affinity and will be running on right cpu
-                    if (_cpuId != -1)
-                    {
-                        Scheduler.SetCurrentThreadAffinity(_cpuId);
-                    }
-
                     _thread = new Thread(PollThread);
                     _thread.Start();
-
-                    // reset parent affinity
-                    if (_cpuId != -1)
-                    {
-                        Scheduler.ClearCurrentThreadAffinity();
-                    }
                 }
                 catch
                 {
@@ -277,6 +266,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else if (_state == State.Stopped)
                 {
+                    if (_failReason != null)
+                    {
+                        var failReason = _failReason;
+                        _failReason = null;
+                        throw failReason;
+                    }
                     return;
                 }
             }
@@ -289,6 +284,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 if (_state == State.Stopped)
                 {
+                    if (_failReason != null)
+                    {
+                        var failReason = _failReason;
+                        _failReason = null;
+                        throw failReason;
+                    }
                     return;
                 }
                 else if (_state == State.Stopping)
@@ -321,154 +322,173 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private unsafe void PollThread(object obj)
         {
-            // objects are allocated on the PollThread heap
-            int pipeKey;
-            var threadContext = new ThreadContext(this, _transportOptions, _connectionHandler, CreateLogger());
+            ThreadContext threadContext = null;
+            Exception error = null;
+            try
             {
-                // register pipe 
-                pipeKey = threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
-                EPollInterop.EPollControl(threadContext.EPollFd,
-                                          EPollOperation.Add,
-                                          threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
-                                          EPollEvents.Readable,
-                                          EPollData(pipeKey));
-                // accept connections
-                AcceptOn(_endPoint, _cpuId, _transportOptions, threadContext);
-
-                _threadContext = threadContext;
-                CompleteStateChange(State.Started);
-            }
-
-            int epollFd = threadContext.EPollFd;
-            var readEnd = threadContext.PipeEnds.ReadEnd;
-            int notPacked = !EPoll.PackedEvents ? 1 : 0;
-            var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
-            int statReadEvents = 0;
-            int statWriteEvents = 0;
-            int statAcceptEvents = 0;
-            int statAccepts = 0;
-            var sockets = threadContext.Sockets;
-
-            var acceptableSockets = new List<TSocket>(1);
-            var readableSockets = new List<TSocket>(EventBufferLength);
-            var writableSockets = new List<TSocket>(EventBufferLength);
-            bool pipeReadable = false;
-
-            bool running = true;
-            do
-            {
-                int numEvents = EPollInterop.EPollWait(epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
-
-                // actions can be scheduled without unblocking epoll
-                threadContext.SetEpollNotBlocked();
-
-                // check events
-                // we don't handle them immediately:
-                // - this ensures we don't mismatch a closed socket with a new socket that have the same fd
-                //     ~ To have the same fd, the previous fd must be closed, which means it is removed from the epoll
-                //     ~ and won't show up in our next call to epoll.Wait.
-                //     ~ The old fd may be present in the buffer still, but lookup won't give a match, since it is removed
-                //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
-                // - this also improves cache/cpu locality of the lookup
-                int* ptr = buffer;
-                lock (sockets)
+                // .NET doesn't support setting thread affinity on Start
+                // We could change it before starting the thread
+                // so it gets inherited, but we don't know how many threads
+                // the runtime may start.
+                if (_cpuId != -1)
                 {
-                    for (int i = 0; i < numEvents; i++)
+                    Scheduler.SetCurrentThreadAffinity(_cpuId);
+                }
+                // objects are allocated on the PollThread heap
+                int pipeKey;
+                threadContext = new ThreadContext(this, _transportOptions, _connectionHandler, CreateLogger());
+                threadContext.Initialize();
+                {
+                    // register pipe 
+                    pipeKey = threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
+                    EPollInterop.EPollControl(threadContext.EPollFd,
+                                            EPollOperation.Add,
+                                            threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
+                                            EPollEvents.Readable,
+                                            EPollData(pipeKey));
+                    // accept connections
+                    AcceptOn(_endPoint, _cpuId, _transportOptions, threadContext);
+
+                    _threadContext = threadContext;
+                }
+                int epollFd = threadContext.EPollFd;
+                var readEnd = threadContext.PipeEnds.ReadEnd;
+                int notPacked = !EPoll.PackedEvents ? 1 : 0;
+                var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
+                int statReadEvents = 0;
+                int statWriteEvents = 0;
+                int statAcceptEvents = 0;
+                int statAccepts = 0;
+                var sockets = threadContext.Sockets;
+
+                var acceptableSockets = new List<TSocket>(1);
+                var readableSockets = new List<TSocket>(EventBufferLength);
+                var writableSockets = new List<TSocket>(EventBufferLength);
+                bool pipeReadable = false;
+
+                CompleteStateChange(State.Started);
+                bool running = true;
+                do
+                {
+                    int numEvents = EPollInterop.EPollWait(epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
+
+                    // actions can be scheduled without unblocking epoll
+                    threadContext.SetEpollNotBlocked();
+
+                    // check events
+                    // we don't handle them immediately:
+                    // - this ensures we don't mismatch a closed socket with a new socket that have the same fd
+                    //     ~ To have the same fd, the previous fd must be closed, which means it is removed from the epoll
+                    //     ~ and won't show up in our next call to epoll.Wait.
+                    //     ~ The old fd may be present in the buffer still, but lookup won't give a match, since it is removed
+                    //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
+                    // - this also improves cache/cpu locality of the lookup
+                    int* ptr = buffer;
+                    lock (sockets)
                     {
-                        //   Packed             Non-Packed
-                        //   ------             ------
-                        // 0:Events       ==    Events
-                        // 1:Int1 = Key         [Padding]
-                        // 2:Int2 = Key   ==    Int1 = Key
-                        // 3:~~~~~~~~~~         Int2 = Key
-                        //                      ~~~~~~~~~~
-                        int key = ptr[2];
-                        ptr += 3 + notPacked;
-                        TSocket tsocket;
-                        if (sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
+                        for (int i = 0; i < numEvents; i++)
                         {
-                            var type = tsocket.Flags & SocketFlags.TypeMask;
-                            if (type == SocketFlags.TypeClient)
+                            //   Packed             Non-Packed
+                            //   ------             ------
+                            // 0:Events       ==    Events
+                            // 1:Int1 = Key         [Padding]
+                            // 2:Int2 = Key   ==    Int1 = Key
+                            // 3:~~~~~~~~~~         Int2 = Key
+                            //                      ~~~~~~~~~~
+                            int key = ptr[2];
+                            ptr += 3 + notPacked;
+                            TSocket tsocket;
+                            if (sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
                             {
-                                bool read = (key & DupKeyMask) == 0;
-                                if (read)
+                                var type = tsocket.Flags & SocketFlags.TypeMask;
+                                if (type == SocketFlags.TypeClient)
                                 {
-                                    readableSockets.Add(tsocket);
+                                    bool read = (key & DupKeyMask) == 0;
+                                    if (read)
+                                    {
+                                        readableSockets.Add(tsocket);
+                                    }
+                                    else
+                                    {
+                                        writableSockets.Add(tsocket);
+                                    }
                                 }
                                 else
                                 {
-                                    writableSockets.Add(tsocket);
+                                    statAcceptEvents++;
+                                    acceptableSockets.Add(tsocket);
                                 }
                             }
-                            else
+                            else if (key == pipeKey)
                             {
-                                statAcceptEvents++;
-                                acceptableSockets.Add(tsocket);
+                                pipeReadable = true;
                             }
                         }
-                        else if (key == pipeKey)
-                        {
-                            pipeReadable = true;
-                        }
                     }
-                }
 
-                // handle accepts
-                statAcceptEvents += acceptableSockets.Count;
-                for (int i = 0; i < acceptableSockets.Count; i++)
-                {
-                    statAccepts += HandleAccept(acceptableSockets[i], threadContext);
-                }
-                acceptableSockets.Clear();
-
-                // handle writes
-                statWriteEvents += writableSockets.Count;
-                for (int i = 0; i < writableSockets.Count; i++)
-                {
-                    writableSockets[i].CompleteWritable();
-                }
-                writableSockets.Clear();
-
-                // handle reads
-                statReadEvents += readableSockets.Count;
-                for (int i = 0; i < readableSockets.Count; i++)
-                {
-                    readableSockets[i].CompleteReadable();
-                }
-                readableSockets.Clear();
-
-                // handle pipe
-                if (pipeReadable)
-                {
-                    PosixResult result;
-                    do
+                    // handle accepts
+                    statAcceptEvents += acceptableSockets.Count;
+                    for (int i = 0; i < acceptableSockets.Count; i++)
                     {
-                        result = readEnd.TryReadByte();
-                        if (result.Value == PipeStopSockets)
+                        statAccepts += HandleAccept(acceptableSockets[i], threadContext);
+                    }
+                    acceptableSockets.Clear();
+
+                    // handle writes
+                    statWriteEvents += writableSockets.Count;
+                    for (int i = 0; i < writableSockets.Count; i++)
+                    {
+                        writableSockets[i].CompleteWritable();
+                    }
+                    writableSockets.Clear();
+
+                    // handle reads
+                    statReadEvents += readableSockets.Count;
+                    for (int i = 0; i < readableSockets.Count; i++)
+                    {
+                        readableSockets[i].CompleteReadable();
+                    }
+                    readableSockets.Clear();
+
+                    // handle pipe
+                    if (pipeReadable)
+                    {
+                        PosixResult result;
+                        do
                         {
-                            StopSockets(threadContext.Sockets);
-                        }
-                        else if (result.Value == PipeStopThread)
-                        {
-                            running = false;
-                        }
-                    } while (result);
-                    pipeReadable = false;
-                }
+                            result = readEnd.TryReadByte();
+                            if (result.Value == PipeStopSockets)
+                            {
+                                StopSockets(threadContext.Sockets);
+                            }
+                            else if (result.Value == PipeStopThread)
+                            {
+                                running = false;
+                            }
+                        } while (result);
+                        pipeReadable = false;
+                    }
 
-                // scheduled work
-                threadContext.DoScheduledWork();
+                    // scheduled work
+                    threadContext.DoScheduledWork();
 
-            } while (running);
+                } while (running);
 
-            threadContext.Logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents}");
+                threadContext.Logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents}");
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+            finally
+            {
+                // We are not using SafeHandles for epoll to increase performance.
+                // running == false when there are no more Sockets
+                // so we are sure there are no more epoll users.
+                threadContext?.Dispose();
 
-            // We are not using SafeHandles for epoll to increase performance.
-            // running == false when there are no more Sockets
-            // so we are sure there are no more epoll users.
-            threadContext.Dispose();
-
-            CompleteStateChange(State.Stopped);
+                CompleteStateChange(State.Stopped, error);
+            }
         }
 
         private static int HandleAccept(TSocket tacceptSocket, ThreadContext threadContext)
@@ -866,16 +886,30 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             throw new InvalidOperationException($"nameof(TransportThread) is {_state}");
         }
 
-        private void CompleteStateChange(State state)
+        private void CompleteStateChange(State state, Exception error = null)
         {
             TaskCompletionSource<object> tcs;
             lock (_gate)
             {
                 tcs = _stateChangeCompletion;
+                if (tcs == null)
+                {
+                    _failReason = error;
+                }
                 _stateChangeCompletion = null;
                 _state = state;
             }
-            ThreadPool.QueueUserWorkItem(o => tcs?.SetResult(null));
+            ThreadPool.QueueUserWorkItem(o =>
+            {
+                if (error == null)
+                {
+                    tcs?.SetResult(null);
+                }
+                else
+                {
+                    tcs?.SetException(error);
+                }
+            });
         }
 
         private static long EPollData(int fd) => (((long)(uint)fd) << 32) | (long)(uint)fd;

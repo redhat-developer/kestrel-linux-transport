@@ -19,31 +19,36 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 ConnectionHandler = connectionHandler;
 
                 Sockets = new Dictionary<int, TSocket>();
-                EPoll = EPoll.Create();
-                EPollFd = EPoll.DangerousGetHandle().ToInt32();
-                PipeFactory = new PipeFactory();
                 Logger = logger;
                 AcceptSockets = new List<TSocket>();
                 _schedulerAdding = new Queue<ScheduledAction>(1024);
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
-                PipeEnds = PipeEnd.CreatePair(blocking: false);
                 _epollState = EPollBlocked;
                 SendScheduler = transportOptions.DeferSend ? this as IScheduler : InlineScheduler.Default;
             }
 
-            public readonly int EPollFd;
+            public void Initialize()
+            {
+                // These members need to be Disposed
+                EPoll = EPoll.Create();
+                EPollFd = EPoll.DangerousGetHandle().ToInt32();
+                PipeFactory = new PipeFactory();
+                PipeEnds = PipeEnd.CreatePair(blocking: false);
+            }
+
+            public int EPollFd;
             public readonly ILogger Logger;
             public readonly IConnectionHandler ConnectionHandler;
-            public readonly PipeEndPair PipeEnds;
+            public PipeEndPair PipeEnds;
             public readonly IScheduler SendScheduler;
 
             public readonly TransportThread TransportThread;
             // key is the file descriptor
             public readonly Dictionary<int, TSocket> Sockets;
-            public readonly PipeFactory PipeFactory;
+            public PipeFactory PipeFactory;
             public readonly List<TSocket> AcceptSockets;
 
-            private readonly EPoll EPoll;
+            private EPoll EPoll;
             private int _epollState;
             private readonly object _schedulerGate = new object();
             private Queue<ScheduledAction> _schedulerAdding;
