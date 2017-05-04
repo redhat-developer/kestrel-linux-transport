@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
-using Tmds.Posix;
 using Xunit;
 
 namespace Tests

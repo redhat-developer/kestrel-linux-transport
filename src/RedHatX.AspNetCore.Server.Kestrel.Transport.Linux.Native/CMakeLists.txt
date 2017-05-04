@@ -5,6 +5,8 @@ set(SOURCES
     epoll.cpp
     socket.cpp
     scheduler.cpp
+    io.cpp
+    error.cpp
 )
 
 add_library(RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Native

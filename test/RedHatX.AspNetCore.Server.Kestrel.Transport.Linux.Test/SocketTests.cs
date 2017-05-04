@@ -2,7 +2,6 @@ using System;
 using System.Net;
 using System.Threading.Tasks;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
-using Tmds.Posix;
 using Xunit;
 
 namespace Tests

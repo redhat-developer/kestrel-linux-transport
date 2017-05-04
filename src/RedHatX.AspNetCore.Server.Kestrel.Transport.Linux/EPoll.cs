@@ -1,7 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Tmds.Posix;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {

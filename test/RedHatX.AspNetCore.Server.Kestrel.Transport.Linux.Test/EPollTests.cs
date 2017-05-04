@@ -1,6 +1,5 @@
 using System;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
-using Tmds.Posix;
 using Xunit;
 
 namespace Tests
