@@ -5,7 +5,7 @@ using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 
 namespace Microsoft.AspNetCore.Hosting
 {
-    public static class WebHostBuilderLibuvExtensions
+    public static class WebHostBuilderLinuxTransportExtensions
     {
         public static IWebHostBuilder UseLinuxTransport(this IWebHostBuilder hostBuilder)
         {

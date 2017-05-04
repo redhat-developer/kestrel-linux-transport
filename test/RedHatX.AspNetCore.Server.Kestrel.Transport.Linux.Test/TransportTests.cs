@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
@@ -49,8 +50,8 @@ namespace Tests
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
-                var exception = Assert.Throws<PosixException>(() => testServer.ConnectTo());
-                Assert.Equal(PosixResult.ECONNREFUSED, exception.Error);
+                var exception = Assert.Throws<IOException>(() => testServer.ConnectTo());
+                Assert.Equal(PosixResult.ECONNREFUSED, exception.HResult);
             }
         }
 
@@ -72,7 +73,7 @@ namespace Tests
                     Assert.Equal(0, received);
 
                     // send returns EPIPE
-                    var exception = Assert.Throws<PosixException>(() =>
+                    var exception = Assert.Throws<IOException>(() =>
                     {
                         for (int i = 0; i < 10; i++)
                         {
@@ -80,7 +81,7 @@ namespace Tests
                             client.Send(new ArraySegment<byte>(sendBuffer));
                         }                    
                     });
-                    Assert.Equal(PosixResult.EPIPE, exception.Error);
+                    Assert.Equal(PosixResult.EPIPE, exception.HResult);
                 }
             }
         }

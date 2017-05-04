@@ -579,7 +579,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             }
                             else
                             {
-                                error = new PosixException(result.Value);
+                                error = result.AsException();
                                 break;
                             }
                         }

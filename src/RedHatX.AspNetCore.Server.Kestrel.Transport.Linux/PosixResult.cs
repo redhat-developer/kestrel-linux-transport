@@ -2,6 +2,9 @@
 // This software is made available under the MIT License
 // See COPYING for details
 
+using System;
+using System.IO;
+
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     internal partial struct PosixResult
@@ -62,11 +65,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        public Exception AsException()
+        {
+            if (IsSuccess)
+            {
+                throw new InvalidOperationException($"{nameof(PosixResult)} is not an error.");
+            }
+            return new IOException(ErrorName(), _value);
+        }
+
         public void ThrowOnError()
         {
             if (!IsSuccess)
             {
-                throw new PosixException(_value);
+                throw AsException();
             }
         }
 

@@ -64,7 +64,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             else
             {
-                throw new PosixException(PosixResult.EAFNOSUPPORT);
+                var result = new PosixResult(PosixResult.EAFNOSUPPORT);
+                throw result.AsException();
             }
         }
     }
