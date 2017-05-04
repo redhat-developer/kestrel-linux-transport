@@ -18,13 +18,13 @@ before_install:
 script:
 - pushd samples/KestrelSample && dotnet restore && dotnet build && popd
 - pushd test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test && dotnet restore && dotnet test && popd
-- dotnet pack src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER"
+- dotnet pack src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$(date +"%y%m%d")-$TRAVIS_BUILD_NUMBER"
   --output .
 after_success:
 - 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
-  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.*-$TRAVIS_BRANCH-$TRAVIS_BUILD_NUMBER.nupkg
-  https://www.myget.org/F/tmds/api/v2/package ; fi'
+  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.*-$(date +"%y%m%d")-$TRAVIS_BUILD_NUMBER.nupkg
+  https://www.myget.org/F/redhat-dotnet/api/v2/package ; fi'
 
 env:
   global:
-    secure: n9MHrC/DKw6MrTOBPWnvCbu5JxUGocci1LBTPXV4FNAn5JMh7CEEWCX1Nml/x7qfJVoe9tz+aD55IxKY//eTMUQet9Npimc7XXr6Dcjlqc9flE4zXd8WC2d3ch3VU1C+Dxv9nN1pT7n6oWgN8eOk4LALnFmjSsS+jiUruRn+GI7qUnbaHFx11Seoh6lN9qAhsLb57/U+e5HjYqAQyXwiMBdbLkcHPP/DYOLxoD//4WtYpNagzg82ba/CwqB03cAyvyTxjdfedLjbz6sgFXfkf3cr0d1qvav0ZYnyUn7gZ25cvRHFdMUDW9MD0EbF5UUFkyVGy7ugHu8vzScH7zirEBHbR4QIK0Y4sXH6O731fCRG9UzsBLMdTEtlvjljx/8N/vDnMBhWFdHy+yFqqNoR677hWho+zo+oY4oQ0gDab5hN2TKZRM2VT5OhHDUB0Vei30ukxpvGq7P958fDlTO8qq8NqjghWm0us0DqOz8u+P8A6RWW5YBgfQ3BpUX6KfVzeM8j2j9s5AuCiqJ09BfHiqswzqChQuE4wDEfhk2GXdfiHklqr+4tRIBhwXwDmXIPPJcylzc8fGBGXKYZMBEC4oeKK9OGMT5TNv9qBByUTRgW11v6YGH8DDZWn6UqiXeOTE49LqIqaeIk4zUmkQ5FdECc5p4SEkV6VCBQ+rBevkM=
+    secure: "Fosy994vYOkkpbbhjvPD989uDKZw1MWN1tEHgchH1zURW+1in/nirxMBK1QZv8/Lc1Oa3mYonoXl+8PHX3rlZWEGHkU2gwsWfBmRneFAeoeWIiuXVr7rIsG2NF8i+REiwuUlTs+ehQMgRzo1nNGng2hvMrdVtV0G7f2AGRAw16s43yG9qJXKmrXdFW7Mna8ecwq4Ae0c5oXKSr4sdAKIF3+mcHDoVa0/UkHX6NQeHJUPYyaCaPbe7sbwm88CfVXpqDuykM2z1HlhYCQldDKV01XA4/Tw3kNutyxJmujGORYlZ2CqD3welLYUlEJpUR5o16tGAgu1AiBrVGkOyf6BkPzwZr/p3g7VmDoe4tdLyqInwZ6K+6LssibJYPWwUI7nlXuG/1OcRbl0sXfdMFGDqJGMQ1h/hKCuOM1qbBvs8U3aqdDUNT6K7nXBShYwexXKxMA2TvOFEwYR/q+bdTVNi9sogC5oxkOZOecmNj8Jj6ybB3hRExYlSMo1x4Ilps2wLbCcW9x3ZrB4OPf+0Qo488HKHahLK1sNUaVEdrFHb7KB1Xh+7zlQluxqeyy5K9Wn4iME4D0LYBrT9fPtf7zIZHWPCto5j7P5EJwJTUDB4uLp+VLCTU58hFhbi+0AZrlGVrzJgMuUsqAZu4i1DudYzJPsaMsk6ecZTspUWvrAwEE="

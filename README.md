@@ -9,12 +9,12 @@ In this repo we explore creating an experimental Transport for Linux.
 
 # CI
 
-NuGet feed: `https://www.myget.org/F/tmds/api/v3/index.json`
+NuGet feed: `https://www.myget.org/F/redhat-dotnet/api/v3/index.json`
 ```
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
-    <add key="tmds" value="https://www.myget.org/F/tmds/api/v3/index.json" />
+    <add key="rh" value="https://www.myget.org/F/redhat-dotnet/api/v3/index.json" />
   </packageSources>
 </configuration>
 ```
