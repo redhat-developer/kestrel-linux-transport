@@ -13,10 +13,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     sealed partial class TransportThread
     {
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
-        // 32 IOVectors, take up 512B of stack, can send up to 128KB
-        private const int MaxIOVectorSendLength = 32;
-        // 32 IOVectors, take up 512B of stack, can receive up to 128KB
-        private const int MaxIOVectorReceiveLength = 32;
+        // 128 IOVectors, take up 2KB of stack, can send up to 512KB
+        private const int MaxIOVectorSendLength = 128;
+        // 128 IOVectors, take up 2KB of stack, can receive up to 512KB
+        private const int MaxIOVectorReceiveLength = 128;
         private const int MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
@@ -565,9 +565,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         if (!buffer.IsEmpty)
                         {
                             var result = TrySend(tsocket.Fd, ref buffer);
-                            if (result.IsSuccess && result.Value != 0)
+                            if (result.Value == buffer.Length)
                             {
-                                end = result.Value == buffer.Length ? buffer.End : buffer.Move(buffer.Start, result.Value);
+                                end = buffer.End;
+                            }
+                            else if (result.IsSuccess)
+                            {
+                                end = buffer.Move(buffer.Start, result.Value);
                             }
                             else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                             {
@@ -751,8 +755,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             int ioVectorLength = availableBytes <= wb.Buffer.Length ? 1 :
                     Math.Min(1 + (availableBytes - wb.Buffer.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
             var ioVectors = stackalloc IOVector[ioVectorLength];
-
             var allocated = 0;
+
             var advanced = 0;
             int ioVectorsUsed = 0;
             for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
