@@ -1,4 +1,4 @@
-[![Travis](https://api.travis-ci.org/tmds/Tmds.Kestrel.Linux.svg?branch=master)](https://travis-ci.org/tmds/Tmds.Kestrel.Linux)
+[![Travis](https://travis-ci.org/redhat-developer/kestrel-linux-transport.svg?branch=master)](https://travis-ci.org/redhat-developer/kestrel-linux-transport)
 
 # Introduction
 
