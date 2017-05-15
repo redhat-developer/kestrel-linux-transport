@@ -704,14 +704,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else if (!readable0)
                 {
-                    error = new TaskCanceledException("The request was aborted");
+                    error = new ConnectionAbortedException();
                 }
                 while (availableBytes != 0)
                 {
                     var buffer = writer.Alloc(2048);
                     try
                     {
-                        Receive(tsocket.Fd, availableBytes, ref buffer);
+                        error = Receive(tsocket.Fd, availableBytes, ref buffer);
+                        if (error != null)
+                        {
+                            break;
+                        }
                         availableBytes = 0;
                         var flushResult = await buffer.FlushAsync();
                         bool readable = true;
@@ -723,7 +727,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         else if (flushResult.IsCancelled || !readable)
                         {
-                            error = new TaskCanceledException("The request was aborted");
+                            error = new ConnectionAbortedException();
                         }
                     }
                     catch (Exception e)
@@ -750,7 +754,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe void Receive(int fd, int availableBytes, ref WritableBuffer wb)
+        private static unsafe Exception Receive(int fd, int availableBytes, ref WritableBuffer wb)
         {
             int ioVectorLength = availableBytes <= wb.Buffer.Length ? 1 :
                     Math.Min(1 + (availableBytes - wb.Buffer.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
@@ -803,7 +807,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         // We made it!
                         wb.Advance(received - advanced);
-                        return;
+                        return null;
                     }
                     eAgainCount = 0;
                     // Update ioVectors to match bytes read
@@ -822,12 +826,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     eAgainCount++;
                     if (eAgainCount == MaxEAgainCount)
                     {
-                        throw new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
+                        return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
                     }
+                }
+                else if (result == PosixResult.ECONNRESET)
+                {
+                    return new ConnectionResetException(result.ErrorDescription(), result.AsException());
                 }
                 else
                 {
-                    result.ThrowOnError();
+                    return result.AsException();
                 }
             } while (true);
         }
