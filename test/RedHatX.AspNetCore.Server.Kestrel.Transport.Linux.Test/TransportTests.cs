@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
 
@@ -153,7 +154,7 @@ namespace Tests
                 {
                     await input.ReadAsync();
                 }
-                catch (TaskCanceledException)
+                catch (ConnectionAbortedException)
                 {
                     expectedException = true;
                     inputCompletedTcs.SetResult(null);
