@@ -606,7 +606,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                 tsocket.StopReadFromSocket();
 
-                CleanupSocket(tsocket, SocketShutdown.Send);
+                CleanupSocketEnd(tsocket);
             }
         }
 
@@ -678,13 +678,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void RegisterForReadable(TSocket tsocket)
         {
-            bool registered = (tsocket.Flags & SocketFlags.EPollRegistered) != 0;
-            if (!registered)
-            {
-                tsocket.AddFlags(SocketFlags.EPollRegistered);
-            }
+            bool register = tsocket.SetRegistered();
             EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
-                                      registered ? EPollOperation.Modify : EPollOperation.Add,
+                                      register ? EPollOperation.Add : EPollOperation.Modify,
                                       tsocket.Fd,
                                       EPollEvents.Readable | EPollEvents.OneShot,
                                       EPollData(tsocket.Fd));
@@ -750,7 +746,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 tsocket.ConnectionContext.Abort(error);
                 writer.Complete(error);
 
-                CleanupSocket(tsocket, SocketShutdown.Receive);
+                CleanupSocketEnd(tsocket);
             }
         }
 
@@ -840,12 +836,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             } while (true);
         }
 
-        private static void CleanupSocket(TSocket tsocket, SocketShutdown shutdown)
+        private static void CleanupSocketEnd(TSocket tsocket)
         {
-            var oldFlags = tsocket.AddFlags(shutdown == SocketShutdown.Send ? SocketFlags.ShutdownSend : SocketFlags.ShutdownReceive);
-            var other = shutdown == SocketShutdown.Send ? SocketFlags.ShutdownReceive : SocketFlags.ShutdownSend;
-            var close = (oldFlags & other) != 0;
-            if (close)
+            var bothClosed = tsocket.CloseEnd();
+            if (bothClosed)
             {
                 // First remove from the Dictionary, so we can't match with a new fd.
                 tsocket.ThreadContext.RemoveSocket(tsocket.Fd);

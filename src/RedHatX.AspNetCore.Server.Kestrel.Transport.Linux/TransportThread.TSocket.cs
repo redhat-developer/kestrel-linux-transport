@@ -16,8 +16,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             EPollRegistered = 0x01,
 
-            ShutdownSend    = 0x02,
-            ShutdownReceive = 0x04,
+            CloseEnd        = 0x02,
+            BothClosed      = 0x04,
 
             TypeAccept      = 0x10,
             TypeClient      = 0x20,
@@ -41,16 +41,23 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 set { _flags = (int)value; }
             }
 
-            public SocketFlags AddFlags(SocketFlags flags)
+            public bool SetRegistered()
             {
-                int guess;
-                int oldValue = _flags;
-                do
+                if ((_flags & (int)SocketFlags.EPollRegistered) != 0)
                 {
-                    guess = oldValue;
-                    oldValue = Interlocked.CompareExchange(ref _flags, guess | (int)flags, guess);
-                } while (oldValue != guess);
-                return (SocketFlags)oldValue;
+                    return false;
+                }
+                else
+                {
+                    Interlocked.Add(ref _flags, (int)SocketFlags.EPollRegistered);
+                    return true;
+                }
+            }
+
+            public bool CloseEnd()
+            {
+                int value = Interlocked.Add(ref _flags, (int)SocketFlags.CloseEnd);
+                return (value & (int)SocketFlags.BothClosed) != 0;
             }
 
             public ThreadContext ThreadContext;
