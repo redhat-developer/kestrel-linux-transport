@@ -32,7 +32,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private struct ScheduledAction
         {
-            public Action Action;
+            public Action<object> Action;
+            public Object State;
         }
 
         enum State

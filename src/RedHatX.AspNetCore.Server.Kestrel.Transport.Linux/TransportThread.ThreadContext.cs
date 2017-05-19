@@ -59,13 +59,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Volatile.Write(ref _epollState, EPollNotBlocked);
             }
 
-            void IScheduler.Schedule(Action action)
+            void IScheduler.Schedule(Action<object> action, object state)
             {
                 int epollState;
                 lock (_schedulerGate)
                 {
                     epollState = Interlocked.CompareExchange(ref _epollState, EPollNotBlocked, EPollBlocked);
-                    _schedulerAdding.Enqueue(new ScheduledAction { Action = action });
+                    _schedulerAdding.Enqueue(new ScheduledAction { Action = action, State = state });
                 }
                 if (epollState == EPollBlocked)
                 {
@@ -90,7 +90,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     while (queue.Count != 0)
                     {
                         var scheduledAction = queue.Dequeue();
-                        scheduledAction.Action();
+                        scheduledAction.Action(scheduledAction.State);
                     }
                 } while (queueNotEmpty && --loopsRemaining > 0);
 
@@ -114,10 +114,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void CloseAccept()
             {
-                (this as IScheduler).Schedule(() =>
+                (this as IScheduler).Schedule(_ =>
                 {
                     this.TransportThread.CloseAccept(this, Sockets);
-                });
+                }, null);
             }
 
             public void StopSockets()
