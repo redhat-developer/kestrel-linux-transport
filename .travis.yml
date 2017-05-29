@@ -13,7 +13,7 @@ before_install:
 - wget https://raw.githubusercontent.com/dotnet/cli/rel/1.0.0/scripts/obtain/dotnet-install.sh
 - echo '#!/bin/bash' | cat - dotnet-install.sh > dotnet-install.sh.patched && mv dotnet-install.sh.patched dotnet-install.sh
 - chmod +x dotnet-install.sh
-- sudo ./dotnet-install.sh --channel preview --version 2.0.0-preview1-005783 -i /opt/dotnet
+- sudo ./dotnet-install.sh --channel preview --version 2.0.0-preview2-006127 -i /opt/dotnet
 - sudo ln -s /opt/dotnet/dotnet /usr/bin/dotnet
 script:
 - pushd samples/KestrelSample && dotnet restore && dotnet build && popd
