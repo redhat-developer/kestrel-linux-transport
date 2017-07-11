@@ -143,6 +143,53 @@ namespace Tests
         }
 
         [Fact]
+        public async Task Write_Timeout()
+        {
+            const int bufferSize = 2048;
+            var waitingForTimeout = new TaskCompletionSource<object>();
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            {
+                Timer writeTimeout = new Timer(
+                    // timeout -> we are waiting for the socket to become writable
+                    o => output.Complete(new Exception("Write timed out")),
+                    null, Timeout.Infinite, Timeout.Infinite
+                );
+
+                bool flushCompleted;
+                do
+                {
+                    var buffer = output.Alloc(bufferSize);
+                    buffer.Advance(bufferSize);
+
+                    // If it takes 1 second to write, assume the socket
+                    // is no longer writable
+                    writeTimeout.Change(1000, Timeout.Infinite);
+                    var flushResult = await buffer.FlushAsync();
+                    flushCompleted = flushResult.IsCompleted;
+                    // cancel the timeout
+                    writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
+                } while (!flushCompleted);
+
+                waitingForTimeout.SetResult(null);
+
+                writeTimeout.Dispose();
+                output.Complete();
+                input.Complete();
+            };
+
+            using (var testServer = new TestServer(connectionHandler))
+            {
+                await testServer.BindAsync();
+                using (var client = testServer.ConnectTo())
+                {
+                    // wait for the server to timeout our connection
+                    // because we aren't reading
+                    await waitingForTimeout.Task;
+                }
+            }
+        }
+
+        [Fact]
         public async Task CompletingOutputCancelsInput()
         {
             var inputCompletedTcs = new TaskCompletionSource<object>();
