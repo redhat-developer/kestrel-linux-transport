@@ -546,8 +546,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        private static void CompleteWriteToSocket(Exception ex, object state)
+        {
+            if (ex != null)
+            {
+                var tsocket = (TSocket)state;
+                tsocket.StopWriteToSocket();
+            }
+        }
+
         private static async void WriteToSocket(TSocket tsocket, IPipeReader reader)
         {
+            reader.OnWriterCompleted(CompleteWriteToSocket, tsocket);
             Exception error = null;
             try
             {
@@ -602,10 +612,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             finally
             {
-                tsocket.ConnectionContext.OnConnectionClosed(error);
-                reader.Complete(error);
-
                 tsocket.StopReadFromSocket();
+                reader.Complete(error);
+                tsocket.ConnectionContext.OnConnectionClosed(error);
 
                 CleanupSocketEnd(tsocket);
             }
