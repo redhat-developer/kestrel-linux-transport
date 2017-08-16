@@ -16,13 +16,10 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="System.Threading.Thread" Version="4.3.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions" Version="2.0.0-*" />
-    <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="1.1.1" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="1.1.1" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="1.1.1" />
-    <PackageReference Include="System.Threading.ThreadPool" Version="4.3.0" />
-    <PackageReference Include="System.ComponentModel.TypeConverter" Version="4.3.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions" Version="2.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="2.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="2.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="2.0.0" />
   </ItemGroup>
 
 </Project>
