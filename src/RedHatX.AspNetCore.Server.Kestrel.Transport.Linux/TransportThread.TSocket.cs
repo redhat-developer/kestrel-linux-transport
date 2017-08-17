@@ -1,8 +1,8 @@
 using System;
+using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
@@ -26,7 +26,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             DeferAccept     = 0x40
         }
 
-        class TSocket : IConnectionInformation
+        class TSocket : TransportConnection
         {
             public TSocket(ThreadContext threadContext)
             {
@@ -64,11 +64,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public int         Fd;
             public Socket      Socket;
             public Socket      DupSocket;
-            public IPipeReader PipeReader;
-            public IPipeWriter PipeWriter;
-            public IPEndPoint  PeerAddress;
-            public IPEndPoint  LocalAddress;
-            public IConnectionContext ConnectionContext;
+            public IPipeReader ApplicationInput => Application.Connection.Input;
+            public IPipeWriter ApplicationOutput => Application.Connection.Output;
 
             private Action _writableCompletion;
             public bool SetWritableContinuation(Action continuation)
@@ -87,7 +84,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void StopWriteToSocket()
             {
-                PipeReader.CancelPendingRead();
+                ApplicationInput.CancelPendingRead();
                 // unblock Writable (may race with CompleteWritable)
                 Action continuation = Interlocked.Exchange(ref _writableCompletion, _stopSentinel);
                 continuation?.Invoke();
@@ -110,21 +107,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void StopReadFromSocket()
             {
-                PipeWriter.CancelPendingFlush();
+                ApplicationOutput.CancelPendingFlush();
                 // unblock Readable (may race with CompleteReadable)
                 Action continuation = Interlocked.Exchange(ref _readableCompletion, _stopSentinel);
                 continuation?.Invoke();
             }
 
-            IPEndPoint IConnectionInformation.RemoteEndPoint => PeerAddress;
+            public override PipeFactory PipeFactory => ThreadContext.PipeFactory;
 
-            IPEndPoint IConnectionInformation.LocalEndPoint => LocalAddress;
+            public override IScheduler InputWriterScheduler => InlineScheduler.Default;
 
-            PipeFactory IConnectionInformation.PipeFactory => ThreadContext.PipeFactory;
-
-            IScheduler IConnectionInformation.InputWriterScheduler => InlineScheduler.Default;
-
-            IScheduler IConnectionInformation.OutputReaderScheduler => ThreadContext.SendScheduler;
+            public override IScheduler OutputReaderScheduler => ThreadContext.SendScheduler;
         }
 
         struct ReadableAwaitable: ICriticalNotifyCompletion

@@ -1,10 +1,12 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
+using Microsoft.AspNetCore.Protocols;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 
@@ -505,14 +507,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 try
                 {
                     fd = clientSocket.DangerousGetHandle().ToInt32();
+                    var localAddress = clientSocket.GetLocalIPAddress();
+                    var remoteAddress = clientSocket.GetPeerIPAddress();
 
                     tsocket = new TSocket(threadContext)
                     {
                         Flags = SocketFlags.TypeClient,
                         Fd = fd,
                         Socket = clientSocket,
-                        PeerAddress = clientSocket.GetPeerIPAddress(),
-                        LocalAddress = clientSocket.GetLocalIPAddress()
+                        RemoteAddress = remoteAddress.Address,
+                        RemotePort = remoteAddress.Port,
+                        LocalAddress = localAddress.Address,
+                        LocalPort = localAddress.Port
                     };
 
                     clientSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
@@ -523,10 +529,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     return 0;
                 }
 
-                var connectionContext = threadContext.ConnectionHandler.OnConnection(tsocket);
-                tsocket.PipeReader = connectionContext.Output;
-                tsocket.PipeWriter = connectionContext.Input;
-                tsocket.ConnectionContext = connectionContext;
+                threadContext.ConnectionHandler.OnConnection(tsocket);
 
                 var sockets = threadContext.Sockets;
                 lock (sockets)
@@ -534,9 +537,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     sockets.Add(fd, tsocket);
                 }
 
-                WriteToSocket(tsocket, connectionContext.Output);
+                WriteToSocket(tsocket);
                 bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
-                ReadFromSocket(tsocket, connectionContext.Input, dataMayBeAvailable);
+                ReadFromSocket(tsocket, dataMayBeAvailable);
 
                 return 1;
             }
@@ -555,15 +558,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static async void WriteToSocket(TSocket tsocket, IPipeReader reader)
+        private static async void WriteToSocket(TSocket tsocket)
         {
-            reader.OnWriterCompleted(CompleteWriteToSocket, tsocket);
+            tsocket.ApplicationInput.OnWriterCompleted(CompleteWriteToSocket, tsocket);
             Exception error = null;
             try
             {
                 while (true)
                 {
-                    var readResult = await reader.ReadAsync();
+                    var readResult = await tsocket.ApplicationInput.ReadAsync();
                     ReadableBuffer buffer = readResult.Buffer;
                     ReadCursor end = buffer.Start;
                     try
@@ -602,7 +605,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     finally
                     {
                         // We need to call Advance to end the read
-                        reader.Advance(end);
+                        tsocket.ApplicationInput.Advance(end);
                     }
                 }
             }
@@ -613,8 +616,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             finally
             {
                 tsocket.StopReadFromSocket();
-                reader.Complete(error);
-                tsocket.ConnectionContext.OnConnectionClosed(error);
+                tsocket.ApplicationInput.Complete(error);
+                tsocket.Application.OnConnectionClosed(error);
 
                 CleanupSocketEnd(tsocket);
             }
@@ -649,9 +652,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     continue;
                 }
-                void* pointer;
-                memory.TryGetPointer(out pointer);
-                ioVectors[i].Base = pointer;
+                var bufferHandle = memory.Retain(pin: true);
+                ioVectors[i].Base = bufferHandle.PinnedPointer;
+                // It's ok to unpin the handle here because the memory is from the pool
+                // we created, which is already pinned.
+                bufferHandle.Dispose();
                 ioVectors[i].Count = (void*)memory.Length;
                 i++;
                 if (i == ioVectorLength)
@@ -696,7 +701,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                       EPollData(tsocket.Fd));
         }
 
-        private static async void ReadFromSocket(TSocket tsocket, IPipeWriter writer, bool dataMayBeAvailable)
+        private static async void ReadFromSocket(TSocket tsocket, bool dataMayBeAvailable)
         {
             Exception error = null;
             try
@@ -714,7 +719,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 while (availableBytes != 0)
                 {
-                    var buffer = writer.Alloc(2048);
+                    var buffer = tsocket.ApplicationOutput.Alloc(2048);
                     try
                     {
                         error = Receive(tsocket.Fd, availableBytes, ref buffer);
@@ -753,8 +758,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // even when error == null, we call Abort
                 // this mean receiving FIN causes Abort
                 // rationale: https://github.com/aspnet/KestrelHttpServer/issues/1139#issuecomment-251748845
-                tsocket.ConnectionContext.Abort(error);
-                writer.Complete(error);
+                tsocket.Application.Abort(error);
+                tsocket.ApplicationOutput.Complete(error);
 
                 CleanupSocketEnd(tsocket);
             }
@@ -774,11 +779,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 wb.Ensure(1);
                 var memory = wb.Buffer;
                 var length = memory.Length;
-                void* pointer;
-                wb.Buffer.TryGetPointer(out pointer);
-
-                ioVectors[ioVectorsUsed].Base = pointer;
+                var bufferHandle = memory.Retain(pin: true);
+                ioVectors[ioVectorsUsed].Base = bufferHandle.PinnedPointer;
                 ioVectors[ioVectorsUsed].Count = (void*)length;
+                // It's ok to unpin the handle here because the memory is from the pool
+                // we created, which is already pinned.
+                bufferHandle.Dispose();
                 allocated += length;
 
                 if (allocated >= availableBytes)
