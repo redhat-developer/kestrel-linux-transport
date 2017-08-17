@@ -1,8 +1,9 @@
 using System;
 using System.IO;
+using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
+using Microsoft.AspNetCore.Protocols;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
@@ -315,9 +316,10 @@ namespace Tests
             for (int i = 0; i < count; i++)
             {
                 wb.Ensure(4);
-                void* pointer;
-                Assert.True(wb.Buffer.TryGetPointer(out pointer));
+                var bufferHandle = wb.Buffer.Retain(pin: true);
+                void* pointer = bufferHandle.PinnedPointer;
                 *(int*)pointer = i;
+                bufferHandle.Dispose();
                 wb.Advance(4);
             }
         }
@@ -354,8 +356,8 @@ namespace Tests
             int currentValue = bytesReceived / 4;
             foreach (var memory in buffer)
             {
-                void* pointer;
-                Assert.True(memory.TryGetPointer(out pointer));
+                var bufferHandle = memory.Retain(pin: true);
+                void* pointer = bufferHandle.PinnedPointer;
                 byte* pMemory = (byte*)pointer;
                 int length = memory.Length;
 
@@ -397,6 +399,7 @@ namespace Tests
                     }
                 }
                 bytesReceived += memory.Length;
+                bufferHandle.Dispose();
             }
             remainderRef = remainder;
         }

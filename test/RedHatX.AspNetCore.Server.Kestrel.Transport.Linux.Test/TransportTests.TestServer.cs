@@ -1,10 +1,12 @@
 using System;
+using System.IO.Pipelines;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Protocols.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
-using Microsoft.AspNetCore.Server.Kestrel.Internal.System.IO.Pipelines;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 
 namespace Tests
@@ -20,21 +22,17 @@ namespace Tests
 
     class TestServer : IConnectionHandler, IDisposable
     {
-        class ConnectionContext : IConnectionContext
+        class ConnectionContext : IConnectionApplicationFeature
         {
-            public ConnectionContext(string connectionId, IPipeWriter input, IPipeReader output)
+            public ConnectionContext(IPipeWriter input, IPipeReader output)
             {
-                ConnectionId = connectionId;
-                Input = input;
-                Output = output;
+                Connection = new PipeConnection(output, input);
             }
-            public string ConnectionId { get; }
-            public IPipeWriter Input { get; }
-            public IPipeReader Output { get; }
 
             // TODO: Remove these (Use Pipes instead?)
-            void IConnectionContext.Abort(Exception ex) { }
-            void IConnectionContext.OnConnectionClosed(Exception ex) { }
+            void IConnectionApplicationFeature.Abort(Exception ex) { }
+            void IConnectionApplicationFeature.OnConnectionClosed(Exception ex) { }
+            public IPipeConnection Connection { get; set; }
         }
 
         private Transport _transport;
@@ -75,15 +73,16 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public IConnectionContext OnConnection(IConnectionInformation connectionInfo)
+        public void OnConnection(IFeatureCollection features)
         {
-            var factory = connectionInfo.PipeFactory;
-            var input = factory.Create(GetInputPipeOptions(connectionInfo.InputWriterScheduler));
-            var output = factory.Create(GetOutputPipeOptions(connectionInfo.OutputReaderScheduler));
+            var transportFeature = features.Get<IConnectionTransportFeature>();
+            var factory = transportFeature.PipeFactory;
+            var input = factory.Create(GetInputPipeOptions(transportFeature.InputWriterScheduler));
+            var output = factory.Create(GetOutputPipeOptions(transportFeature.OutputReaderScheduler));
 
             _connectionHandler(input.Reader, output.Writer);
 
-            return new ConnectionContext(string.Empty, input.Writer, output.Reader);
+            features.Set<IConnectionApplicationFeature>(new ConnectionContext(input.Writer, output.Reader));
         }
 
         // copied from Kestrel
@@ -126,7 +125,6 @@ namespace Tests
                         break;
                     }
 
-                    int len = request.Length;
                     var response = output.Alloc();
                     response.Append(request);
                     await response.FlushAsync();
