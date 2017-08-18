@@ -319,7 +319,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private ILogger CreateLogger()
         {
-            return _loggerFactory.CreateLogger("{nameof(TransportThread)}.{_threadId}");
+            return _loggerFactory.CreateLogger($"{nameof(TransportThread)}.{_threadId}");
         }
 
         private unsafe void PollThread(object obj)

@@ -77,7 +77,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new InvalidOperationException("Already bound");
             }
-            _logger.LogInformation($@"BindAsync TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
+            _logger.LogInformation($@"BindAsync {endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
 
             var tasks = new Task[threads.Length];
             for (int i = 0; i < threads.Length; i++)
