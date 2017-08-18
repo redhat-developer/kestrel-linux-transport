@@ -36,6 +36,8 @@ public static IWebHost BuildWebHost(string[] args) =>
                 .Build();
 ```
 
+**note**: It's safe to call `UseLinuxTransport` on non-Linux platforms, it will no-op.
+
 # Repo structure
 
 There are 5 projects in this repository:
