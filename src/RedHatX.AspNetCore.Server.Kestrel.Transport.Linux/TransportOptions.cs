@@ -5,13 +5,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private int? _threadCount;
         private bool? _threadAffinity;
 
-        public bool ReceiveOnIncomingCpu { get; set; } = false;
+        internal bool ReceiveOnIncomingCpu { get; set; } = false;
 
         public bool DeferAccept { get; set; } = true;
 
         public bool DeferSend { get; set; } = true;
 
-        public CpuSet CpuSet { get; set; }
+        internal CpuSet CpuSet { get; set; }
 
         public int ThreadCount
         {
@@ -19,7 +19,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             set => _threadCount = value;
         }
 
-        public bool SetThreadAffinity
+        internal bool SetThreadAffinity
         {
             get => _threadAffinity ?? (ReceiveOnIncomingCpu || !CpuSet.IsEmpty);
             set => _threadAffinity = value;

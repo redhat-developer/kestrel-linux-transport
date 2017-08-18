@@ -54,9 +54,9 @@ namespace SampleApp
                 Console.WriteLine("\t-t<tc>   Number of transport threads");
                 Console.WriteLine("\tnott     Defer requests to thread pool");
                 Console.WriteLine("  Linux transport specific:");
-                Console.WriteLine("\tta       Set thread affinity");
-                Console.WriteLine("\tic       Receive on incoming cpu (implies ta)");
-                Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
+                // Console.WriteLine("\tta       Set thread affinity");
+                // Console.WriteLine("\tic       Receive on incoming cpu (implies ta)");
+                // Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
                 Console.WriteLine("\tnoda     No deferred accept");
                 Console.WriteLine("\tnods     No deferred send");
                 return;
@@ -68,33 +68,35 @@ namespace SampleApp
             };
 
             bool libuv = args.Contains("libuv");
-            bool ta = args.Contains("ta");
-            bool ic = args.Contains("ic");
+            // bool ta = args.Contains("ta");
+            // bool ic = args.Contains("ic");
             bool ds = !args.Contains("nods");
             bool da = !args.Contains("noda");
             bool tt = !args.Contains("nott");
             _log = args.Contains("log");
             int threadCount = 0;
-            CpuSet cpuSet = default(CpuSet);
+            // CpuSet cpuSet = default(CpuSet);
             foreach (var arg in args)
             {
-                if (arg.StartsWith("-c"))
-                {
-                    cpuSet = CpuSet.Parse(arg.Substring(2));
-                    ta = true;
-                }
-                else if (arg.StartsWith("-t"))
+                // if (arg.StartsWith("-c"))
+                // {
+                //     cpuSet = CpuSet.Parse(arg.Substring(2));
+                //     ta = true;
+                // }
+                //else
+                if (arg.StartsWith("-t"))
                 {
                     threadCount = int.Parse(arg.Substring(2));
                 }
             }
-            if (ic)
-            {
-                ta = true;
-            }
+            // if (ic)
+            // {
+            //     ta = true;
+            // }
             if (threadCount == 0)
             {
-                threadCount = (libuv || cpuSet.IsEmpty) ? Environment.ProcessorCount : cpuSet.Cpus.Length;
+                // threadCount = (libuv || cpuSet.IsEmpty) ? Environment.ProcessorCount : cpuSet.Cpus.Length;
+                threadCount = Environment.ProcessorCount;
             }
 
             Console.WriteLine($"Server GC is {(GCSettings.IsServerGC ? "enabled" : "disabled")}");
@@ -104,7 +106,8 @@ namespace SampleApp
             }
             else
             {
-                Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
+                // Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
+                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}");
             }
 
             var hostBuilder = new WebHostBuilder()
@@ -123,11 +126,11 @@ namespace SampleApp
                 hostBuilder = hostBuilder.UseLinuxTransport(options =>
                 {
                     options.ThreadCount = threadCount;
-                    options.SetThreadAffinity = ta;
-                    options.ReceiveOnIncomingCpu = ic;
+                    //options.SetThreadAffinity = ta;
+                    //options.ReceiveOnIncomingCpu = ic;
                     options.DeferAccept = da;
                     options.DeferSend = ds;
-                    options.CpuSet = cpuSet;
+                    //options.CpuSet = cpuSet;
                 });
             }
 

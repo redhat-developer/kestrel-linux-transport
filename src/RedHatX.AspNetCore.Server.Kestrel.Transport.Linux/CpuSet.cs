@@ -5,7 +5,7 @@ using System.ComponentModel;
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     [TypeConverter(typeof(CpuSetTypeConverter))]
-    public struct CpuSet
+    internal struct CpuSet
     {
         int[] _cpus;
 
