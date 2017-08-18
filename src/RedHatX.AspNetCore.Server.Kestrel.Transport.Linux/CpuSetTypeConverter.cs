@@ -4,7 +4,7 @@ using System.Globalization;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    public class CpuSetTypeConverter : TypeConverter
+    internal class CpuSetTypeConverter : TypeConverter
     {
         public override bool CanConvertFrom(ITypeDescriptorContext context, Type sourceType)
         {
