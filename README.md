@@ -5,12 +5,12 @@
 The ASP.NET Core Kestrel webserver has been using libuv as a cross-platform network library.
 It is possible to replace libuv with another implementation thanks to the `Transport` abstraction.
 
-In this repo we explore creating an experimental Transport for Linux.
+In this repo we explore creating a Transport for Linux specifically.
 
-# CI
+# Using the package
 
-NuGet feed: `https://www.myget.org/F/redhat-dotnet/api/v3/index.json`
-```
+Add the myget feed to your `NuGet.Config` file:
+```xml
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
@@ -19,7 +19,22 @@ NuGet feed: `https://www.myget.org/F/redhat-dotnet/api/v3/index.json`
 </configuration>
 ```
 
-Dependency: `"RedHatX.AspNetCore.Server.Kestrel.Transport.Linux": "0.1.0-*"`
+Include a package reference in your project `csproj` file:
+```xml
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.All" Version="2.0.0" />
+    <PackageReference Include="RedHatX.AspNetCore.Server.Kestrel.Transport.Linux" Version="2.0.0-*" />
+  </ItemGroup>
+```
+
+Call `UseLinuxTransport` when creating the `WebHost` in your `Program.cs`:
+```C#
+public static IWebHost BuildWebHost(string[] args) =>
+            WebHost.CreateDefaultBuilder(args)
+                .UseLinuxTransport()
+                .UseStartup<Startup>()
+                .Build();
+```
 
 # Repo structure
 
@@ -56,15 +71,6 @@ load-balancing between the listen sockets.
 
 The Transport has these options:
 
-- **SetThreadAffinity**: This option binds the Transport Threads to specific cpus. This is improves data caching. This
-is even more important for NUMA systems. This option defaults to false.
-
-- **CpuSet**: Specifies the logical processors on which to bind the TransportThreads. This option implies `SetThreadAffinity`.
-
-- **ReceiveOnIncomingCPU**: This uses the [`SO_INCOMING_CPU`](https://www.spinics.net/lists/netdev/msg347106.html) socket option.
-This makes the kernel cpu that handles the socket match with the application cpu that will handle the receive. This requires
-the NIC is configured to receive on multiple cpus using RSS. This option implies `SetThreadAffinity`.
-
 - **DeferAccept**: This uses the `TCP_DEFER_ACCEPT` socket option. Instead of being notified of a new connection when
 the TCP connection is set up, the application is notified when the connection was setup and data has arrived. This options
 defaults to true.
@@ -74,6 +80,3 @@ defaults to true.
 
 - **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number processors in `CpuSet` when specified
 and the number of logical processors in the system otherwise.
-
-This transport can be used with the Kestrel `UseTransportThread` option.
-See `samples/KestrelSample` on how to use the transport with Kestrel.
