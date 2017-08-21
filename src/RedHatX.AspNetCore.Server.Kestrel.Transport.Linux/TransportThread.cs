@@ -121,8 +121,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 fd = acceptSocket.DangerousGetHandle().ToInt32();
                 if (!ipv4)
                 {
-                    // Don't do mapped ipv4
-                    acceptSocket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 1);
+                    // Kestrel does mapped ipv4 by default.
+                    acceptSocket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
                 }
                 if (transportOptions.ReceiveOnIncomingCpu)
                 {
