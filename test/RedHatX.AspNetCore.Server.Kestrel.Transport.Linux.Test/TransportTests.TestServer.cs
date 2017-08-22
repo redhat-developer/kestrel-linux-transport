@@ -22,19 +22,6 @@ namespace Tests
 
     class TestServer : IConnectionHandler, IDisposable
     {
-        class ConnectionContext : IConnectionApplicationFeature
-        {
-            public ConnectionContext(IPipeWriter input, IPipeReader output)
-            {
-                Connection = new PipeConnection(output, input);
-            }
-
-            // TODO: Remove these (Use Pipes instead?)
-            void IConnectionApplicationFeature.Abort(Exception ex) { }
-            void IConnectionApplicationFeature.OnConnectionClosed(Exception ex) { }
-            public IPipeConnection Connection { get; set; }
-        }
-
         private Transport _transport;
         private IPEndPoint _serverAddress;
         private TestServerConnectionHandler _connectionHandler;
@@ -82,7 +69,8 @@ namespace Tests
 
             _connectionHandler(input.Reader, output.Writer);
 
-            features.Set<IConnectionApplicationFeature>(new ConnectionContext(input.Writer, output.Reader));
+            transportFeature.Transport = new PipeConnection(input.Reader, output.Writer);
+            transportFeature.Application = new PipeConnection(output.Reader, input.Writer);
         }
 
         // copied from Kestrel
