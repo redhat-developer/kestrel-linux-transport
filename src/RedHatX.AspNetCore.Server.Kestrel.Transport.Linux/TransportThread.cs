@@ -617,7 +617,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 tsocket.StopReadFromSocket();
                 tsocket.ApplicationInput.Complete(error);
-                tsocket.Application.OnConnectionClosed(error);
+                tsocket.Close(error);
 
                 CleanupSocketEnd(tsocket);
             }
@@ -758,7 +758,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // even when error == null, we call Abort
                 // this mean receiving FIN causes Abort
                 // rationale: https://github.com/aspnet/KestrelHttpServer/issues/1139#issuecomment-251748845
-                tsocket.Application.Abort(error);
+                tsocket.Abort(error);
                 tsocket.ApplicationOutput.Complete(error);
 
                 CleanupSocketEnd(tsocket);
