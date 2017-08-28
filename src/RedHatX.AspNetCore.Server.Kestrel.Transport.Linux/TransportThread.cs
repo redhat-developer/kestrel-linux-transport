@@ -560,13 +560,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static async void WriteToSocket(TSocket tsocket)
         {
-            tsocket.ApplicationInput.OnWriterCompleted(CompleteWriteToSocket, tsocket);
+            tsocket.Output.OnWriterCompleted(CompleteWriteToSocket, tsocket);
             Exception error = null;
             try
             {
                 while (true)
                 {
-                    var readResult = await tsocket.ApplicationInput.ReadAsync();
+                    var readResult = await tsocket.Output.ReadAsync();
                     ReadableBuffer buffer = readResult.Buffer;
                     ReadCursor end = buffer.Start;
                     try
@@ -605,7 +605,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     finally
                     {
                         // We need to call Advance to end the read
-                        tsocket.ApplicationInput.Advance(end);
+                        tsocket.Output.Advance(end);
                     }
                 }
             }
@@ -616,8 +616,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             finally
             {
                 tsocket.StopReadFromSocket();
-                tsocket.ApplicationInput.Complete(error);
-                tsocket.Close(error);
+                tsocket.Output.Complete(error);
 
                 CleanupSocketEnd(tsocket);
             }
@@ -719,7 +718,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 while (availableBytes != 0)
                 {
-                    var buffer = tsocket.ApplicationOutput.Alloc(2048);
+                    var buffer = tsocket.Input.Alloc(2048);
                     try
                     {
                         error = Receive(tsocket.Fd, availableBytes, ref buffer);
@@ -758,8 +757,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // even when error == null, we call Abort
                 // this mean receiving FIN causes Abort
                 // rationale: https://github.com/aspnet/KestrelHttpServer/issues/1139#issuecomment-251748845
-                tsocket.Abort(error);
-                tsocket.ApplicationOutput.Complete(error);
+                tsocket.Input.Complete(error);
 
                 CleanupSocketEnd(tsocket);
             }

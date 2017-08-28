@@ -64,8 +64,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public int         Fd;
             public Socket      Socket;
             public Socket      DupSocket;
-            public IPipeReader ApplicationInput => Application.Input;
-            public IPipeWriter ApplicationOutput => Application.Output;
 
             private Action _writableCompletion;
             public bool SetWritableContinuation(Action continuation)
@@ -84,7 +82,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void StopWriteToSocket()
             {
-                ApplicationInput.CancelPendingRead();
+                Output.CancelPendingRead();
                 // unblock Writable (may race with CompleteWritable)
                 Action continuation = Interlocked.Exchange(ref _writableCompletion, _stopSentinel);
                 continuation?.Invoke();
@@ -107,7 +105,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void StopReadFromSocket()
             {
-                ApplicationOutput.CancelPendingFlush();
+                Input.CancelPendingFlush();
                 // unblock Readable (may race with CompleteReadable)
                 Action continuation = Interlocked.Exchange(ref _readableCompletion, _stopSentinel);
                 continuation?.Invoke();
@@ -118,9 +116,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public override IScheduler InputWriterScheduler => InlineScheduler.Default;
 
             public override IScheduler OutputReaderScheduler => ThreadContext.SendScheduler;
-
-            public new void Abort(Exception e) => base.Abort(e);
-            public new void Close(Exception e) => base.Close(e);
         }
 
         struct ReadableAwaitable: ICriticalNotifyCompletion
