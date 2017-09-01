@@ -85,25 +85,25 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return SocketInterop.GetAvailableBytes(this);
         }
 
-        public void Bind(IPEndPoint endpoint)
+        public void Bind(IPEndPointStruct endpoint)
         {
             TryBind(endpoint)
                 .ThrowOnError();
         }
 
-        public unsafe PosixResult TryBind(IPEndPoint endpoint)
+        public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
         {
             IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
             return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
         }
 
-        public void Connect(IPEndPoint endpoint)
+        public void Connect(IPEndPointStruct endpoint)
         {
             TryConnect(endpoint)
                 .ThrowOnError();
         }
 
-        public unsafe PosixResult TryConnect(IPEndPoint endpoint)
+        public unsafe PosixResult TryConnect(IPEndPointStruct endpoint)
         {
             IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
             return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
@@ -234,15 +234,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return rv;
         }
 
-        public IPEndPoint GetLocalIPAddress()
+        public IPEndPointStruct GetLocalIPAddress()
         {
-            IPEndPoint ep;
+            IPEndPointStruct ep;
             TryGetLocalIPAddress(out ep)
                 .ThrowOnError();
             return ep;
         }
 
-        public unsafe PosixResult TryGetLocalIPAddress(out IPEndPoint ep)
+        public unsafe PosixResult TryGetLocalIPAddress(out IPEndPointStruct ep)
         {
             IPSocketAddress socketAddress;
             var rv = SocketInterop.GetSockName(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
@@ -252,20 +252,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             else
             {
-                ep = null;
+                ep = default(IPEndPointStruct);
             }
             return rv;
         }
 
-        public IPEndPoint GetPeerIPAddress()
+        public IPEndPointStruct GetPeerIPAddress()
         {
-            IPEndPoint ep;
+            IPEndPointStruct ep;
             TryGetPeerIPAddress(out ep)
                 .ThrowOnError();
             return ep;
         }
 
-        public unsafe PosixResult TryGetPeerIPAddress(out IPEndPoint ep)
+        public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
         {
             IPSocketAddress socketAddress;
             var rv = SocketInterop.GetPeerName(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
@@ -275,7 +275,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             else
             {
-                ep = null;
+                ep = default(IPEndPointStruct);
             }
             return rv;
         }
