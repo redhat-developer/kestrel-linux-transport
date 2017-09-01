@@ -17,12 +17,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             set { _family = (short)value; }
         }
 
-        public unsafe IPSocketAddress(IPEndPoint endPoint)
+        public unsafe IPSocketAddress(IPEndPointStruct endPoint)
         {
-            if (endPoint == null)
-            {
-                throw new ArgumentNullException(nameof(endPoint));
-            }
             bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
             FlowInfo = 0;
             _family = (short)(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6);
@@ -38,7 +34,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public IPEndPoint ToIPEndPoint()
+        public IPEndPointStruct ToIPEndPoint()
         {
             if (Family == AddressFamily.InterNetwork)
             {
@@ -47,7 +43,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     value = ((address[3] << 24 | address[2] << 16 | address[1] << 8 | address[0]) & 0x0FFFFFFFF);
                 }
-                return new IPEndPoint(new IPAddress(value), Port);
+                return new IPEndPointStruct(new IPAddress(value), Port);
             }
             else if (Family == AddressFamily.InterNetworkV6)
             {
@@ -60,7 +56,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         bytes[i] = address[i];
                     }
                 }
-                return new IPEndPoint(new IPAddress(bytes, ScopeId), Port);
+                return new IPEndPointStruct(new IPAddress(bytes, ScopeId), Port);
             }
             else
             {

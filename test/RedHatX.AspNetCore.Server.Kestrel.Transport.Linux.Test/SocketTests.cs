@@ -19,7 +19,7 @@ namespace Tests
             var serverSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
             
             // Bind
-            var serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
+            var serverAddress = new IPEndPointStruct(IPAddress.Loopback, 0);
             result = serverSocket.TryBind(serverAddress);
             Assert.True(result.IsSuccess);
             result = serverSocket.TryGetLocalIPAddress(out serverAddress);
@@ -214,7 +214,7 @@ namespace Tests
         internal static void CreateConnectedSockets(out Socket socket1, out Socket socket2, bool blocking, bool ipv4 = true)
         {
             var serverSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: true);
-            var serverAddress = new IPEndPoint(ipv4 ? IPAddress.Loopback : IPAddress.IPv6Loopback , 0);
+            var serverAddress = new IPEndPointStruct(ipv4 ? IPAddress.Loopback : IPAddress.IPv6Loopback , 0);
             serverSocket.Bind(serverAddress);
             serverAddress = serverSocket.GetLocalIPAddress();
             serverSocket.Listen(10);
