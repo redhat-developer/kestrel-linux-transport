@@ -34,7 +34,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public IPEndPointStruct ToIPEndPoint()
+        public IPEndPointStruct ToIPEndPoint(IPAddress reuseAddress = null)
         {
             if (Family == AddressFamily.InterNetwork)
             {
@@ -43,10 +43,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     value = ((address[3] << 24 | address[2] << 16 | address[1] << 8 | address[0]) & 0x0FFFFFFFF);
                 }
-                return new IPEndPointStruct(new IPAddress(value), Port);
+                bool matchesReuseAddress = reuseAddress != null && reuseAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && reuseAddress.Address == value;
+                return new IPEndPointStruct(matchesReuseAddress ? reuseAddress : new IPAddress(value), Port);
             }
             else if (Family == AddressFamily.InterNetworkV6)
             {
+                // We can't check if we can use reuseAddress without allocating.
                 const int length = 16;
                 var bytes = new byte[length];
                 fixed (byte* address = Address)

@@ -229,5 +229,40 @@ namespace Tests
             socket1 = clientSocket;
             socket2 = acceptedSocket;
         }
+
+        public void ReuseLocalAddress()
+        {
+            PosixResult result;
+
+            // Create server socket
+            var serverSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+
+            // Bind
+            var serverAddress = new IPEndPointStruct(IPAddress.Loopback, 0);
+            result = serverSocket.TryBind(serverAddress);
+            Assert.True(result.IsSuccess);
+
+            // Get address
+            result = serverSocket.TryGetLocalIPAddress(out serverAddress);
+            Assert.True(result.IsSuccess);
+
+            // Get address (no reuse)
+            IPEndPointStruct serverAddress2;
+            var reuseAddress = IPAddress.None;
+            result = serverSocket.TryGetLocalIPAddress(out serverAddress2, reuseAddress);
+            Assert.True(result.IsSuccess);
+            Assert.Equal(serverAddress.Address, serverAddress2.Address);
+            Assert.NotEqual(serverAddress.Address, reuseAddress);
+            Assert.False(object.ReferenceEquals(serverAddress.Address, serverAddress2.Address));
+
+            // Get address (reuse)
+            IPEndPointStruct serverAddress3;
+            result = serverSocket.TryGetLocalIPAddress(out serverAddress3, reuseAddress: serverAddress2.Address);
+            Assert.True(result.IsSuccess);
+            Assert.True(object.ReferenceEquals(serverAddress2.Address, serverAddress3.Address));
+
+            // Close
+            serverSocket.Dispose();
+        }
     }
 }
