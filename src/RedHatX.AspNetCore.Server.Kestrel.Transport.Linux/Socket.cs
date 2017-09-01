@@ -234,21 +234,21 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return rv;
         }
 
-        public IPEndPointStruct GetLocalIPAddress()
+        public IPEndPointStruct GetLocalIPAddress(IPAddress reuseAddress = null)
         {
             IPEndPointStruct ep;
-            TryGetLocalIPAddress(out ep)
+            TryGetLocalIPAddress(out ep, reuseAddress)
                 .ThrowOnError();
             return ep;
         }
 
-        public unsafe PosixResult TryGetLocalIPAddress(out IPEndPointStruct ep)
+        public unsafe PosixResult TryGetLocalIPAddress(out IPEndPointStruct ep, IPAddress reuseAddress = null)
         {
             IPSocketAddress socketAddress;
             var rv = SocketInterop.GetSockName(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
             if (rv.IsSuccess)
             {
-                ep = socketAddress.ToIPEndPoint();
+                ep = socketAddress.ToIPEndPoint(reuseAddress);
             }
             else
             {

@@ -507,7 +507,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 try
                 {
                     fd = clientSocket.DangerousGetHandle().ToInt32();
-                    var localAddress = clientSocket.GetLocalIPAddress();
+
+                    // Store the last LocalAddress on the tacceptSocket so we might reuse it instead
+                    // of allocating a new one for the same address.
+                    var localAddress = clientSocket.GetLocalIPAddress(tacceptSocket.LocalAddress);
+                    tacceptSocket.LocalAddress = localAddress.Address;
                     var remoteAddress = clientSocket.GetPeerIPAddress();
 
                     tsocket = new TSocket(threadContext)
