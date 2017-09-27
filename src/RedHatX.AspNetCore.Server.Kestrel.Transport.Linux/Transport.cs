@@ -110,7 +110,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(_endPoint, _connectionHandler, _transportOptions, threadId, cpuId, _loggerFactory);
+                var thread = new TransportThread(_endPoint, _connectionHandler, _transportOptions, null, threadId, cpuId, _loggerFactory);
                 threads[i] = thread;
             }
             return threads;
