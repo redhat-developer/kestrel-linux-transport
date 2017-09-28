@@ -10,14 +10,27 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     internal class Transport : ITransport
     {
-        private static readonly TransportThread[] EmptyThreads = Array.Empty<TransportThread>();
-        private IEndPointInformation _endPoint;
-        private IConnectionHandler _connectionHandler;
-        private AcceptThread _acceptThread;
-        private TransportThread[] _threads;
-        private LinuxTransportOptions _transportOptions;
-        private ILoggerFactory _loggerFactory;
-        private ILogger _logger;
+        private enum State
+        {
+            Created,
+            Binding,
+            Bound,
+            Unbinding,
+            Unbound,
+            Stopping,
+            Stopped,
+            Disposing,
+            Disposed
+        }
+
+        private readonly IEndPointInformation _endPoint;
+        private readonly IConnectionHandler _connectionHandler;
+        private readonly LinuxTransportOptions _transportOptions;
+        private readonly ILoggerFactory _loggerFactory;
+        private readonly ILogger _logger;
+        private State _state;
+        private readonly object _gate = new object();
+        private ITransportActionHandler[] _threads;
 
         public Transport(IEndPointInformation ipEndPointInformation, IConnectionHandler connectionHandler, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
@@ -43,34 +56,69 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             _transportOptions = transportOptions;
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<Transport>();
+            _threads = Array.Empty<TransportThread>();
         }
 
         public async Task BindAsync()
         {
-            switch (_endPoint.Type)
+            lock (_gate)
             {
-                case ListenType.IPEndPoint:
-                    IPEndPoint ipEndPoint = _endPoint.IPEndPoint;
-                    _threads = CreateTransportThreads(ipEndPoint, acceptThread: null);
-                    break;
-                case ListenType.SocketPath:
-                case ListenType.FileHandle:
-                    Socket socket = null;
-                    _acceptThread = new AcceptThread(socket);
-                    _threads = CreateTransportThreads(ipEndPoint: null, acceptThread: _acceptThread);
-                    break;
-            }
+                if (_state != State.Created)
+                {
+                    ThrowInvalidOperation();
+                }
+                _state = State.Binding;
 
-            _logger.LogInformation($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
+                IPEndPoint ipEndPoint;
+                AcceptThread acceptThread;
+                TransportThread[] transportThreads;
+                switch (_endPoint.Type)
+                {
+                    case ListenType.IPEndPoint:
+                        ipEndPoint = _endPoint.IPEndPoint;
+                        acceptThread = null;
+                        transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
+                        break;
+                    case ListenType.SocketPath:
+                    case ListenType.FileHandle:
+                        Socket socket = null;
+                        ipEndPoint = null;
+                        acceptThread = new AcceptThread(socket);
+                        transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
+                        break;
+                    default:
+                        throw new NotSupportedException($"Unknown ListenType: {_endPoint.Type}.");
+                }
+
+                _threads = new ITransportActionHandler[transportThreads.Length + (acceptThread != null ? 1 : 0)];
+                _threads[0] = acceptThread;
+                for (int i = 0; i < transportThreads.Length; i++)
+                {
+                    _threads[i + (acceptThread == null ? 0 : 1)] = transportThreads[i];
+                }
+
+                _logger.LogInformation($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
+            }
 
             var tasks = new Task[_threads.Length];
             for (int i = 0; i < _threads.Length; i++)
             {
-                tasks[i] = _threads[i].StartAsync();
+                tasks[i] = _threads[i].BindAsync();
             }
             try
             {
                 await Task.WhenAll(tasks);
+                lock (_gate)
+                {
+                    if (_state == State.Binding)
+                    {
+                        _state = State.Bound;
+                    }
+                    else
+                    {
+                        ThrowInvalidOperation();
+                    }
+                }
             }
             catch
             {
@@ -140,86 +188,111 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return ids;
         }
 
-        public Task UnbindAsync()
+        public async Task UnbindAsync()
         {
-            var threads = Volatile.Read(ref _threads);
-            ThrowIfInvalidState(state: threads, starting: false);
-            var tasks = new Task[threads.Length];
-            for (int i = 0; i < threads.Length; i++)
+            lock (_gate)
             {
-                tasks[i] = threads[i].CloseAcceptAsync();
+                ThrowIfDisposed();
+                if (_state <= State.Unbinding)
+                {
+                    _state = State.Unbinding;
+                }
+                else
+                {
+                    return;
+                }
             }
-            return Task.WhenAll(tasks);
+            var tasks = new Task[_threads.Length];
+            for (int i = 0; i < _threads.Length; i++)
+            {
+                tasks[i] = _threads[i].UnbindAsync();
+            }
+            await Task.WhenAll(tasks);
+            lock (_gate)
+            {
+                if (_state == State.Unbinding)
+                {
+                    _state = State.Unbound;
+                }
+                else
+                {
+                    ThrowInvalidOperation();
+                }
+            }
         }
 
-        public Task StopAsync()
+        public async Task StopAsync()
         {
-            var threads = Volatile.Read(ref _threads);
-            ThrowIfInvalidState(state: threads, starting: false);
-            var tasks = new Task[threads.Length];
-            for (int i = 0; i < threads.Length; i++)
+            lock (_gate)
             {
-                tasks[i] = threads[i].StopAsync();
+                ThrowIfDisposed();
+                if (_state <= State.Stopping)
+                {
+                    _state = State.Stopping;
+                }
+                else
+                {
+                    return;
+                }
             }
-            return Task.WhenAll(tasks);
+            var tasks = new Task[_threads.Length];
+            for (int i = 0; i < _threads.Length; i++)
+            {
+                tasks[i] = _threads[i].StopAsync();
+            }
+            await Task.WhenAll(tasks);
+            lock (_gate)
+            {
+                if (_state == State.Stopping)
+                {
+                    _state = State.Stopped;
+                }
+                else
+                {
+                    ThrowInvalidOperation();
+                }
+            }
         }
 
         public void Dispose()
         {
-            var threads = Interlocked.Exchange(ref _threads, EmptyThreads);
-            if (threads.Length == 0)
+            lock (_gate)
             {
-                return;
+                if (_state < State.Disposing)
+                {
+                    _state = State.Disposing;
+                }
             }
-            var tasks = new Task[threads.Length];
-            for (int i = 0; i < threads.Length; i++)
+            var tasks = new Task[_threads.Length];
+            for (int i = 0; i < _threads.Length; i++)
             {
-                tasks[i] = threads[i].StopAsync();
+                tasks[i] = _threads[i].StopAsync();
             }
             try
             {
                 Task.WaitAll(tasks);
             }
             finally
-            {}
-        }
-
-        private void ThrowIfInvalidState(TransportThread[] state, bool starting)
-        {
-            if (state == EmptyThreads)
             {
-                throw new ObjectDisposedException(nameof(Transport));
-            }
-            else if (state == null && !starting)
-            {
-                throw new InvalidOperationException("Not started");
-            }
-            else if (state != null && starting)
-            {
-                throw new InvalidOperationException("Already starting");
+                lock (_gate)
+                {
+                    _state = State.Disposed;
+                }
             }
         }
-        /*
-        // TODO: We'd like Kestrel to use these values for MaximumSize{Low,Heigh} but the abstraction
-        //       doesn't support it.
-        public static PipeOptions InputPipeOptions = new PipeOptions()
-        {
-            // Would be nice if we could set this to 1 to limit prefetching to a single receive
-            // but we can't: https://github.com/dotnet/corefxlab/issues/1355
-            MaximumSizeHigh = 2000,
-            MaximumSizeLow =  2000,
-            WriterScheduler = InlineScheduler.Default,
-            ReaderScheduler = InlineScheduler.Default,
-        };
 
-        public static PipeOptions OutputPipeOptions = new PipeOptions()
+        private void ThrowIfDisposed()
         {
-            // Buffer as much as we can send in a single system call
-            // Wait until everything is sent.
-            MaximumSizeHigh = TransportThread.MaxSendLength,
-            MaximumSizeLow = 1,
-            WriterScheduler = InlineScheduler.Default,
-            ReaderScheduler = InlineScheduler.Default,
-        };*/
+            if (_state == State.Disposed)
+            {
+                throw new ObjectDisposedException(typeof(Transport).FullName);
+            }
+        }
+
+        private void ThrowInvalidOperation()
+        {
+            ThrowIfDisposed();
+            throw new InvalidOperationException($"Invalid operation: {_state}");
+        }
     }
 }

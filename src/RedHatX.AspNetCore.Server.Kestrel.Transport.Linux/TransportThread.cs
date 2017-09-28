@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    sealed partial class TransportThread
+    sealed partial class TransportThread : ITransportActionHandler
     {
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
         // 128 IOVectors, take up 2KB of stack, can send up to 512KB
@@ -78,7 +78,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             _loggerFactory = loggerFactory;
         }
 
-        public Task StartAsync()
+        public Task BindAsync()
         {
             TaskCompletionSource<object> tcs;
             lock (_gate)
@@ -202,7 +202,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public async Task CloseAcceptAsync()
+        public async Task UnbindAsync()
         {
             TaskCompletionSource<object> tcs = null;
             lock (_gate)
@@ -228,7 +228,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             try
             {
-                await StartAsync();
+                await BindAsync();
             }
             catch
             {}
@@ -283,7 +283,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            await CloseAcceptAsync();
+            await UnbindAsync();
 
             TaskCompletionSource<object> tcs = null;
             bool triggerStateChange = false;
