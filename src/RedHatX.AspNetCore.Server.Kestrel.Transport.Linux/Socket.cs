@@ -133,12 +133,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return SocketInterop.Accept(this, null, 0, blocking, out clientSocket);
         }
 
-        public unsafe PosixResult TryReceiveSocket(out Socket clientSocket, bool blocking)
-        {
-            clientSocket = null;
-            return new PosixResult(-1);
-        }
-
         public int Receive(ArraySegment<byte> buffer)
         {
             var result = TryReceive(buffer);

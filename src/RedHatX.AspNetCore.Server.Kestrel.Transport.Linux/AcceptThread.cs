@@ -1,22 +1,155 @@
+using System;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     sealed class AcceptThread : ITransportActionHandler
     {
-        public AcceptThread(Socket socket)
-        {}
+        private enum State
+        {
+            Initial,
+            Started,
+            Stopped
+        }
 
-        public Socket CreateThreadSocket()
-            => null;
+        private Socket _socket;
+        private State _state;
+        private readonly object _gate = new object();
+        private TaskCompletionSource<object> _stoppedTcs;
+        private Thread _thread;
+        private PipeEndPair _pipeEnds;
+        private PipeEnd[] _handlers;
+
+        public AcceptThread(Socket socket)
+        {
+            _socket = socket;
+            _state = State.Initial;
+            _handlers = Array.Empty<PipeEnd>();
+        }
+
+        public PipeEnd CreateSocketReadPipe()
+        {
+            lock (_gate)
+            {
+                if (_state != State.Initial)
+                {
+                    throw new InvalidOperationException($"Invalid operation: {_state}");
+                }
+                PipeEndPair pipeEnds = PipeEnd.CreatePair(blocking: false);
+                var updatedHandlers = new PipeEnd[_handlers.Length + 1];
+                Array.Copy(_handlers, updatedHandlers, _handlers.Length);
+                updatedHandlers[updatedHandlers.Length - 1] = pipeEnds.WriteEnd;
+                _handlers = updatedHandlers;
+                return pipeEnds.ReadEnd;
+            }
+        }
 
         public Task BindAsync()
-            => Task.CompletedTask;
+        {
+            lock (_gate)
+            {
+                if (_state != State.Initial)
+                {
+                    throw new InvalidOperationException($"Invalid operation: {_state}");
+                }
+
+                _stoppedTcs = new TaskCompletionSource<object>();
+                try
+                {
+                    _pipeEnds = PipeEnd.CreatePair(blocking: false);
+                    _thread = new Thread(AcceptThreadStart);;
+                    _thread.Start();
+                    _state = State.Started;
+                    return _stoppedTcs.Task;
+                }
+                catch (System.Exception)
+                {
+                    _state = State.Stopped;
+                    _stoppedTcs = null;
+                    _socket.Dispose();
+                    Cleanup();
+                    throw;
+                }
+            }
+        }
 
         public Task UnbindAsync()
-            => Task.CompletedTask;
+        {
+            lock (_gate)
+            {
+                // TODO: write to pipeendpair
+                _state = State.Stopped;
+                return (Task)_stoppedTcs?.Task ?? Task.CompletedTask;
+            }
+        }
 
         public Task StopAsync()
-            => Task.CompletedTask;
+            => UnbindAsync();
+
+        private void Cleanup()
+        {
+            _pipeEnds.Dispose();
+            foreach (var handler in _handlers)
+            {
+                handler.Dispose();
+            }
+        }
+
+        private unsafe void AcceptThreadStart(object state)
+        {
+            try
+            {
+                using (_socket)
+                {
+                    using (EPoll epoll = EPoll.Create())
+                    {
+                        int epollFd = epoll.DangerousGetHandle().ToInt32();
+                        const int acceptKey = 0;
+                        const int pipeKey = 1;
+                        // accept socket
+                        epoll.Control(EPollOperation.Add, _socket, EPollEvents.Readable, new EPollData { Int1 = acceptKey, Int2 = acceptKey});
+                        // add pipe
+                        epoll.Control(EPollOperation.Add, _pipeEnds.ReadEnd, EPollEvents.Readable, new EPollData { Int1 = pipeKey, Int2 = pipeKey});
+
+                        const int EventBufferLength = 1;
+                        int notPacked = !EPoll.PackedEvents ? 1 : 0;
+                        var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
+                        int* key = &buffer[2];
+
+                        bool running = true;
+                        int nextHandler = 0;
+                        var handlers = _handlers;
+                        do
+                        {
+                            int numEvents = EPollInterop.EPollWait(epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
+                            if (numEvents == 1)
+                            {
+                                if (*key == acceptKey)
+                                {
+                                    // TODO accept socket and pass it to handler
+                                    var handler = handlers[nextHandler];
+                                    nextHandler = (nextHandler + 1) % handlers.Length;
+
+                                }
+                                else
+                                {
+                                    running = false;
+                                }
+                            }
+                        } while (running);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                _stoppedTcs.SetException(e);
+            }
+            finally
+            {
+                Cleanup();
+                _stoppedTcs.SetResult(null);
+            }
+        }
     }
 }

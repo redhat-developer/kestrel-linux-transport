@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    struct PipeEndPair : IDisposable
+    struct PipeEndPair
     {
         public PipeEnd ReadEnd;
         public PipeEnd WriteEnd;
@@ -19,6 +19,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     {
         [DllImport(Interop.Library, EntryPoint="RHXKL_Pipe")]
         public extern static PosixResult Pipe(out PipeEnd readEnd, out PipeEnd writeEnd, bool blocking);
+
+        [DllImport(Interop.Library, EntryPoint="RHXKL_Pipe")]
+        public extern static PosixResult ReceiveSocket(int pipeEnd, out Socket socket, bool blocking);
     }
 
     class PipeEnd : CloseSafeHandle
@@ -81,6 +84,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public new PosixResult TryRead(ArraySegment<byte> buffer)
         {
             return base.TryRead(buffer);
+        }
+
+        public unsafe PosixResult TryReceiveSocket(out Socket clientSocket, bool blocking)
+        {
+            clientSocket = null;
+            return new PosixResult(-1);
+        }
+
+        public unsafe PosixResult TrySendSocket(int fd)
+        {
+            return new PosixResult(-1);
         }
 
         public static PipeEndPair CreatePair(bool blocking)

@@ -107,6 +107,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             try
             {
+                // TODO: bind TransportThreads before AcceptThread
                 await Task.WhenAll(tasks);
                 lock (_gate)
                 {
