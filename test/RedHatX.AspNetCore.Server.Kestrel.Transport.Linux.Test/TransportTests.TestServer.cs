@@ -26,6 +26,24 @@ namespace Tests
         private IPEndPoint _serverAddress;
         private TestServerConnectionHandler _connectionHandler;
 
+        private class EndPointInfo : IEndPointInformation
+        {
+            private IPEndPoint _ipEndPoint;
+
+            public EndPointInfo(IPEndPoint ipEndPoint)
+            {
+                _ipEndPoint = ipEndPoint;
+            }
+
+            public ListenType Type { get => ListenType.IPEndPoint; }
+            public IPEndPoint IPEndPoint { get => _ipEndPoint; set { } }
+            public string SocketPath { get => null; }
+            public ulong FileHandle { get => 0; }
+            public FileHandleType HandleType { get => FileHandleType.Auto; set { } }
+            public bool NoDelay { get => true; }
+
+        }
+
         public TestServer(TestServerOptions options = null)
         {
             options = options ?? new TestServerOptions();
@@ -38,7 +56,7 @@ namespace Tests
             };
             var loggerFactory = new LoggerFactory();
             loggerFactory.AddConsole((n, l) => false);
-            _transport = new Transport(_serverAddress, this, transportOptions, loggerFactory);
+            _transport = new Transport(new EndPointInfo(_serverAddress), this, transportOptions, loggerFactory);
         }
 
         public TestServer(TestServerConnectionHandler connectionHandler) :

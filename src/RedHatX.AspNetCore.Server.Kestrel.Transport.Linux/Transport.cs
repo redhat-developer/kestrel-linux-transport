@@ -11,36 +11,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     internal class Transport : ITransport
     {
         private static readonly TransportThread[] EmptyThreads = Array.Empty<TransportThread>();
-        private IPEndPoint _endPoint;
+        private IEndPointInformation _endPoint;
         private IConnectionHandler _connectionHandler;
+        private AcceptThread _acceptThread;
         private TransportThread[] _threads;
         private LinuxTransportOptions _transportOptions;
         private ILoggerFactory _loggerFactory;
         private ILogger _logger;
 
-        public Transport(IEndPointInformation IEndPointInformation, IConnectionHandler connectionHandler, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory) :
-            this(CreateEndPointFromIEndPointInformation(IEndPointInformation), connectionHandler, transportOptions, loggerFactory)
-        {}
-
-        private static IPEndPoint CreateEndPointFromIEndPointInformation(IEndPointInformation IEndPointInformation)
-        {
-            if (IEndPointInformation == null)
-            {
-                throw new ArgumentNullException(nameof(IEndPointInformation));
-            }
-            if (IEndPointInformation.Type != ListenType.IPEndPoint)
-            {
-                throw new NotSupportedException("Only IPEndPoints are supported.");
-            }
-            if (IEndPointInformation.IPEndPoint == null)
-            {
-                throw new ArgumentNullException(nameof(IEndPointInformation.IPEndPoint));
-            }
-
-            return IEndPointInformation.IPEndPoint;
-        }
-
-        public Transport(IPEndPoint listenEndPoint, IConnectionHandler connectionHandler, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
+        public Transport(IEndPointInformation ipEndPointInformation, IConnectionHandler connectionHandler, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
             if (connectionHandler == null)
             {
@@ -54,12 +33,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new ArgumentException(nameof(loggerFactory));
             }
-            if (listenEndPoint == null)
+            if (ipEndPointInformation == null)
             {
-                throw new ArgumentException(nameof(listenEndPoint));
+                throw new ArgumentException(nameof(ipEndPointInformation));
             }
 
-            _endPoint = listenEndPoint;
+            _endPoint = ipEndPointInformation;
             _connectionHandler = connectionHandler;
             _transportOptions = transportOptions;
             _loggerFactory = loggerFactory;
@@ -68,21 +47,26 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public async Task BindAsync()
         {
-            var threads = CreateTransportThreads();
-            var original = Interlocked.CompareExchange(ref _threads, threads, null);
-            ThrowIfInvalidState(state: original, starting: true);
-
-            IPEndPoint endPoint = Interlocked.Exchange(ref _endPoint, null);
-            if (endPoint == null)
+            switch (_endPoint.Type)
             {
-                throw new InvalidOperationException("Already bound");
+                case ListenType.IPEndPoint:
+                    IPEndPoint ipEndPoint = _endPoint.IPEndPoint;
+                    _threads = CreateTransportThreads(ipEndPoint, acceptThread: null);
+                    break;
+                case ListenType.SocketPath:
+                case ListenType.FileHandle:
+                    Socket socket = null;
+                    _acceptThread = new AcceptThread(socket);
+                    _threads = CreateTransportThreads(ipEndPoint: null, acceptThread: _acceptThread);
+                    break;
             }
-            _logger.LogInformation($@"BindAsync {endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
 
-            var tasks = new Task[threads.Length];
-            for (int i = 0; i < threads.Length; i++)
+            _logger.LogInformation($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
+
+            var tasks = new Task[_threads.Length];
+            for (int i = 0; i < _threads.Length; i++)
             {
-                tasks[i] = threads[i].StartAsync();
+                tasks[i] = _threads[i].StartAsync();
             }
             try
             {
@@ -97,7 +81,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static int s_threadId = 0;
 
-        private TransportThread[] CreateTransportThreads()
+        private AcceptThread CreateAcceptThread(Socket acceptSocket)
+        {
+            return null;
+        }
+
+        private TransportThread[] CreateTransportThreads(IPEndPoint ipEndPoint, AcceptThread acceptThread)
         {
             var threads = new TransportThread[_transportOptions.ThreadCount];
             IList<int> preferredCpuIds = null;
@@ -110,7 +99,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(_endPoint, _connectionHandler, _transportOptions, null, threadId, cpuId, _loggerFactory);
+                var thread = new TransportThread(ipEndPoint, _connectionHandler, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
                 threads[i] = thread;
             }
             return threads;
