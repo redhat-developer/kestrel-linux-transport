@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
 
@@ -78,8 +79,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             lock (_gate)
             {
-                // TODO: write to pipeendpair
-                _state = State.Stopped;
+                if (_state != State.Stopped)
+                {
+                    _state = State.Stopped;
+
+                    try
+                    {
+                        _pipeEnds.WriteEnd?.WriteByte(0);
+                    }
+                    catch (IOException ex) when (ex.HResult == PosixResult.EPIPE)
+                    {}
+                    catch (ObjectDisposedException)
+                    {}
+                }
                 return (Task)_stoppedTcs?.Task ?? Task.CompletedTask;
             }
         }
@@ -100,7 +112,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             try
             {
-                using (_socket)
+                var socket = _socket;
+                using (socket)
                 {
                     using (EPoll epoll = EPoll.Create())
                     {
@@ -127,10 +140,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             {
                                 if (*key == acceptKey)
                                 {
-                                    // TODO accept socket and pass it to handler
                                     var handler = handlers[nextHandler];
                                     nextHandler = (nextHandler + 1) % handlers.Length;
-
+                                    socket.TryAcceptAndSendHandleTo(handler);
                                 }
                                 else
                                 {

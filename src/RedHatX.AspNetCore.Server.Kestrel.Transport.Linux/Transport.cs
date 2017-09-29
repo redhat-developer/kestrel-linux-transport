@@ -22,6 +22,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             Disposing,
             Disposed
         }
+        // Kestrel LibuvConstants.ListenBacklog
+        private const int ListenBacklog = 128;
 
         private readonly IEndPointInformation _endPoint;
         private readonly IConnectionHandler _connectionHandler;
@@ -61,6 +63,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public async Task BindAsync()
         {
+            AcceptThread acceptThread;
+            TransportThread[] transportThreads;
             lock (_gate)
             {
                 if (_state != State.Created)
@@ -70,8 +74,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _state = State.Binding;
 
                 IPEndPoint ipEndPoint;
-                AcceptThread acceptThread;
-                TransportThread[] transportThreads;
                 switch (_endPoint.Type)
                 {
                     case ListenType.IPEndPoint:
@@ -81,7 +83,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         break;
                     case ListenType.SocketPath:
                     case ListenType.FileHandle:
-                        Socket socket = null;
+                        Socket socket;
+                        if (_endPoint.Type == ListenType.SocketPath)
+                        {
+                            socket = Socket.Create(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+                            socket.Bind(_endPoint.SocketPath);
+                            socket.Listen(ListenBacklog);
+                        }
+                        else
+                        {
+                            socket = new Socket((int)_endPoint.FileHandle);
+                        }
                         ipEndPoint = null;
                         acceptThread = new AcceptThread(socket);
                         transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
@@ -100,15 +112,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _logger.LogInformation($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
             }
 
-            var tasks = new Task[_threads.Length];
-            for (int i = 0; i < _threads.Length; i++)
+            var tasks = new Task[transportThreads.Length];
+            for (int i = 0; i < transportThreads.Length; i++)
             {
-                tasks[i] = _threads[i].BindAsync();
+                tasks[i] = transportThreads[i].BindAsync();
             }
             try
             {
-                // TODO: bind TransportThreads before AcceptThread
                 await Task.WhenAll(tasks);
+
+                if (acceptThread != null)
+                {
+                    await acceptThread.BindAsync();
+                }
+
                 lock (_gate)
                 {
                     if (_state == State.Binding)

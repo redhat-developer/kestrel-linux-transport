@@ -76,14 +76,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         [DllImport(Interop.Library, EntryPoint="RHXKL_ReceiveHandle")]
         public extern static PosixResult ReceiveSocket(Socket fromSocket, out Socket socket, bool blocking);
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_AcceptAndSendHandle")]
-        public extern static PosixResult AcceptAndSendHandle(Socket fromSocket, SafeHandle toSocket);
+        [DllImport(Interop.Library, EntryPoint="RHXKL_AcceptAndSendHandleTo")]
+        public extern static PosixResult AcceptAndSendHandleTo(Socket fromSocket, SafeHandle toSocket);
     }
 
     // Warning: Some operations use DangerousGetHandle for increased performance
     class Socket : CloseSafeHandle
     {
         private Socket()
+        {}
+
+        public Socket(int handle) :
+            base(handle)
         {}
 
         public static Socket Create(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking)
@@ -104,6 +108,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public PosixResult TryGetAvailableBytes()
         {
             return SocketInterop.GetAvailableBytes(this);
+        }
+
+        public void Bind(string unixPath)
+        {
+            TryBind(unixPath)
+                .ThrowOnError();
+        }
+
+        public unsafe PosixResult TryBind(string unixPath)
+        {
+            UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
+            return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
         }
 
         public void Bind(IPEndPointStruct endpoint)
@@ -342,9 +358,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return SocketInterop.ReceiveSocket(this, out socket, blocking);
         }
 
-        public unsafe PosixResult TryAcceptAndSendHandle(Socket toSocket)
+        public unsafe PosixResult TryAcceptAndSendHandleTo(Socket toSocket)
         {
-            return SocketInterop.AcceptAndSendHandle(this, toSocket);
+            return SocketInterop.AcceptAndSendHandleTo(this, toSocket);
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using System.Text;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -70,13 +71,29 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
     unsafe struct UnixSocketAddress
     {
+        private const int PathLength = 108;
+        public unsafe UnixSocketAddress(string path)
+        {
+            _family = (short)AddressFamily.Unix;
+            var bytes = Encoding.UTF8.GetBytes(path);
+            int length = Math.Min(bytes.Length, PathLength);
+            fixed (byte* pathBytes = Path)
+            {
+                for (int i = 0; i < length; i++)
+                {
+                    pathBytes[i] = bytes[i];
+                }
+            }
+            Length = (ushort)length;
+            
+        }
         private short     _family;
         public AddressFamily Family
         {
             get { return (AddressFamily)_family; }
             set { _family = (short)value; }
         }
-        private fixed byte Path[108];
+        private fixed byte Path[PathLength];
         public ushort      Length;
     }
 }

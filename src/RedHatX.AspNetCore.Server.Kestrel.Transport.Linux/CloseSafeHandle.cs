@@ -13,6 +13,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             : base(new IntPtr(-1), true)
         {}
 
+        protected CloseSafeHandle(int handle)
+            : base(new IntPtr(handle), true)
+        {}
+
         public override bool IsInvalid
         {
             get { return handle == new IntPtr(-1); }
