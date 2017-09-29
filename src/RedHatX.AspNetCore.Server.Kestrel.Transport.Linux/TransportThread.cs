@@ -327,12 +327,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return _loggerFactory.CreateLogger($"{nameof(TransportThread)}.{_threadId}");
         }
 
-        private Socket MaskAsSocket(PipeEnd pipeEnd)
-        {
-            // TODO
-            return null;
-        }
-
         private unsafe void PollThread(object obj)
         {
             ThreadContext threadContext = null;
@@ -364,9 +358,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     SocketFlags flags;
                     if (_acceptThread != null)
                     {
-                        flags = SocketFlags.TypePipe;
-                        var pipeEnd = _acceptThread.CreateSocketReadPipe();
-                        acceptSocket = MaskAsSocket(pipeEnd);
+                        flags = SocketFlags.TypePassFd;
+                        acceptSocket = _acceptThread.CreateReceiveSocket();
                     }
                     else
                     {
@@ -532,7 +525,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             else
             {
-                result = PipeInterop.ReceiveSocket(tacceptSocket.Fd, out clientSocket, blocking: false);
+                result = tacceptSocket.Socket.TryReceiveSocket(out clientSocket, blocking: false);
             }
             if (result.IsSuccess)
             {

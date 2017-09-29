@@ -19,16 +19,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private TaskCompletionSource<object> _stoppedTcs;
         private Thread _thread;
         private PipeEndPair _pipeEnds;
-        private PipeEnd[] _handlers;
+        private Socket[] _handlers;
 
         public AcceptThread(Socket socket)
         {
             _socket = socket;
             _state = State.Initial;
-            _handlers = Array.Empty<PipeEnd>();
+            _handlers = Array.Empty<Socket>();
         }
 
-        public PipeEnd CreateSocketReadPipe()
+        public Socket CreateReceiveSocket()
         {
             lock (_gate)
             {
@@ -36,12 +36,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     throw new InvalidOperationException($"Invalid operation: {_state}");
                 }
-                PipeEndPair pipeEnds = PipeEnd.CreatePair(blocking: false);
-                var updatedHandlers = new PipeEnd[_handlers.Length + 1];
+                var pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+                var updatedHandlers = new Socket[_handlers.Length + 1];
                 Array.Copy(_handlers, updatedHandlers, _handlers.Length);
-                updatedHandlers[updatedHandlers.Length - 1] = pipeEnds.WriteEnd;
+                updatedHandlers[updatedHandlers.Length - 1] = pair.Socket1;
                 _handlers = updatedHandlers;
-                return pipeEnds.ReadEnd;
+                return pair.Socket2;
             }
         }
 

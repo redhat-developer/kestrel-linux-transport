@@ -58,6 +58,9 @@ extern "C"
     PosixResult RHXKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
     PosixResult RHXKL_GetSockName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
     PosixResult RHXKL_Duplicate(intptr_t socket, intptr_t* dup);
+    PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking);
+    PosixResult RHXKL_AcceptAndSendHandle(intptr_t acceptSocket, intptr_t toSocket);
+    PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
 }
 
 struct IPSocketAddress
@@ -958,4 +961,156 @@ PosixResult RHXKL_Duplicate(intptr_t socket, intptr_t* dup)
     *dup = rv;
 
     return ToPosixResult(rv);
+}
+
+PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking)
+{
+    if (receiveHandle == nullptr)
+    {
+        return PosixResultEFAULT;
+    }
+
+    *receiveHandle = -1;
+
+    char dummyBuffer = 0;
+    struct iovec    iov;
+    iov.iov_base = &dummyBuffer;
+    iov.iov_len = sizeof(dummyBuffer);
+
+    char controlBuffer[CMSG_SPACE(sizeof(int))] = { 0 };
+
+    msghdr header =
+    {
+        .msg_name = nullptr,
+        .msg_namelen = 0,
+        .msg_iov = &iov,
+        .msg_iovlen = 1,
+        .msg_control = controlBuffer,
+        .msg_controllen = sizeof(controlBuffer),
+        .msg_flags = 0
+    };
+
+    int fd = ToFileDescriptor(socket);
+    int flags = MSG_NOSIGNAL | MSG_CMSG_CLOEXEC;
+    int rv;
+    while (CheckInterrupted(rv = static_cast<int>(recvmsg(fd, &header, flags))));
+
+    if (rv != -1)
+    {
+        rv = 0;
+        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != NULL; cmsg = CMSG_NXTHDR(&header,cmsg))
+        {
+            if (cmsg->cmsg_level == SOL_SOCKET
+                    && cmsg->cmsg_type == SCM_RIGHTS) {
+                int *fdptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
+                int receiveFd = *fdptr;
+
+                flags = fcntl(receiveFd, F_GETFL, 0);
+                if (blocking == 0)
+                {
+                    flags |= O_NONBLOCK;
+                }
+                else
+                {
+                    flags &= ~O_NONBLOCK;
+                }
+                fcntl(receiveFd, F_SETFL, flags);
+
+                *receiveHandle = receiveFd;
+                rv = 1;
+                break;
+            }
+        }
+    }
+
+    return ToPosixResult(rv);
+}
+
+PosixResult RHXKL_AcceptAndSendHandle(intptr_t acceptSocket, intptr_t toSocket)
+{
+    int acceptFd = ToFileDescriptor(acceptSocket);
+
+    int rv;
+    while (CheckInterrupted(rv = accept4(acceptFd, nullptr, nullptr, SOCK_CLOEXEC)));
+    if (rv != -1)
+    {
+        int acceptedFd = rv;
+
+        char dummyBuffer = 0;
+        struct iovec    iov;
+        iov.iov_base = &dummyBuffer;
+        iov.iov_len = sizeof(dummyBuffer);
+
+        char controlBuffer[CMSG_SPACE(sizeof(int))];
+
+        msghdr header =
+        {
+            .msg_name = nullptr,
+            .msg_namelen = 0,
+            .msg_iov = &iov,
+            .msg_iovlen = 1,
+            .msg_control = controlBuffer,
+            .msg_controllen = sizeof(controlBuffer),
+            .msg_flags = 0
+        };
+
+        struct cmsghdr* cmsg = CMSG_FIRSTHDR(&header);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        int *fdptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
+        *fdptr = acceptedFd;
+
+        int toFd = ToFileDescriptor(toSocket);
+        while (CheckInterrupted(rv = static_cast<int>(sendmsg(toFd, &header, MSG_NOSIGNAL))));
+
+        close(acceptedFd);
+    }
+
+    return ToPosixResult(rv);
+}
+
+PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2)
+{
+    if (socket1 == nullptr || socket2 == nullptr)
+    {
+        return PosixResultEFAULT;
+    }
+
+    *socket1 = -1;
+    *socket2 = -1;
+
+    sa_family_t platformAddressFamily;
+    int platformSocketType, platformProtocolType;
+
+    if (!TryConvertAddressFamilyPalToPlatform(addressFamily, &platformAddressFamily))
+    {
+        return PosixResultForErrno(EAFNOSUPPORT);
+    }
+
+    if (!TryConvertSocketTypePalToPlatform(socketType, &platformSocketType))
+    {
+        return PosixResultForErrno(EPROTOTYPE);
+    }
+
+    if (!TryConvertProtocolTypePalToPlatform(protocolType, &platformProtocolType))
+    {
+        return PosixResultForErrno(EPROTONOSUPPORT);
+    }
+
+    platformSocketType |= SOCK_CLOEXEC;
+    if (blocking == 0)
+    {
+        platformSocketType |= SOCK_NONBLOCK;
+    }
+
+    int sv[2];
+    int rv = socketpair(platformAddressFamily, platformSocketType, platformProtocolType, sv);
+    if (rv == 0)
+    {
+        *socket1 = sv[0];
+        *socket2 = sv[1];
+    }
+
+    return ToPosixResult(rv);   
 }

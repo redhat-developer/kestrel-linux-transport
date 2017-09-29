@@ -21,7 +21,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             TypeAccept      = 0x10,
             TypeClient      = 0x20,
-            TypePipe      = 0x30,
+            TypePassFd      = 0x30,
             TypeMask        = 0x30,
 
             DeferAccept     = 0x40
