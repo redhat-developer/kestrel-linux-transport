@@ -59,7 +59,7 @@ extern "C"
     PosixResult RHXKL_GetSockName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
     PosixResult RHXKL_Duplicate(intptr_t socket, intptr_t* dup);
     PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking);
-    PosixResult RHXKL_AcceptAndSendHandle(intptr_t acceptSocket, intptr_t toSocket);
+    PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket);
     PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
 }
 
@@ -312,6 +312,7 @@ static bool TryGetPlatformSocketAddress(PalSocketAddress* palSocketAddress, int3
                 {
                     addrun->sun_path[palUnix->Length] = 0;
                 }
+                *sockLen = offsetof(struct sockaddr_un, sun_path) + palUnix->Length;
                 return true;
             }
         case PAL_AF_INET:
@@ -1026,7 +1027,7 @@ PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_AcceptAndSendHandle(intptr_t acceptSocket, intptr_t toSocket)
+PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket)
 {
     int acceptFd = ToFileDescriptor(acceptSocket);
 

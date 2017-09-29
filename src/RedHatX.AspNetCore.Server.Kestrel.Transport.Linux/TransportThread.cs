@@ -511,6 +511,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        private static readonly IPAddress NotIPSocket = IPAddress.None;
+
         private static int HandleAccept(TSocket tacceptSocket, ThreadContext threadContext)
         {
             var type = tacceptSocket.Flags & SocketFlags.TypeMask;
@@ -526,6 +528,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             else
             {
                 result = tacceptSocket.Socket.TryReceiveSocket(out clientSocket, blocking: false);
+                if (result.Value == 0)
+                {
+                    // The socket passing us file descriptors has closed.
+                    // We dispose our end so we get get removed from the epoll.
+                    tacceptSocket.Socket.Dispose();
+                    return 0;
+                }
             }
             if (result.IsSuccess)
             {
@@ -535,11 +544,23 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     fd = clientSocket.DangerousGetHandle().ToInt32();
 
+                    bool ipSocket = !object.ReferenceEquals(tacceptSocket.LocalAddress, NotIPSocket);
+
                     // Store the last LocalAddress on the tacceptSocket so we might reuse it instead
                     // of allocating a new one for the same address.
-                    var localAddress = clientSocket.GetLocalIPAddress(tacceptSocket.LocalAddress);
-                    tacceptSocket.LocalAddress = localAddress.Address;
-                    var remoteAddress = clientSocket.GetPeerIPAddress();
+                    IPEndPointStruct localAddress = default(IPEndPointStruct);
+                    IPEndPointStruct remoteAddress = default(IPEndPointStruct);
+                    if (ipSocket && clientSocket.TryGetLocalIPAddress(out localAddress, tacceptSocket.LocalAddress))
+                    {
+                        tacceptSocket.LocalAddress = localAddress.Address;
+                        clientSocket.TryGetPeerIPAddress(out remoteAddress);
+                    }
+                    else
+                    {
+                        // This is not an IP socket.
+                        tacceptSocket.LocalAddress = NotIPSocket;
+                        ipSocket = false;
+                    }
 
                     tsocket = new TSocket(threadContext)
                     {
@@ -552,7 +573,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         LocalPort = localAddress.Port
                     };
 
-                    clientSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                    if (ipSocket)
+                    {
+                        clientSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                    }
                 }
                 catch
                 {

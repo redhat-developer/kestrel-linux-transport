@@ -119,7 +119,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public unsafe PosixResult TryBind(string unixPath)
         {
             UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
-            return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
+            return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(UnixSocketAddress));
         }
 
         public void Bind(IPEndPointStruct endpoint)

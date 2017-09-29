@@ -85,8 +85,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
             Length = (ushort)length;
-            
         }
+
         private short     _family;
         public AddressFamily Family
         {

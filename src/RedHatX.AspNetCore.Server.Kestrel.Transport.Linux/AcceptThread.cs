@@ -46,7 +46,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public Task BindAsync()
+        public async Task BindAsync()
         {
             lock (_gate)
             {
@@ -62,7 +62,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     _thread = new Thread(AcceptThreadStart);;
                     _thread.Start();
                     _state = State.Started;
-                    return _stoppedTcs.Task;
                 }
                 catch (System.Exception)
                 {
@@ -152,6 +151,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         } while (running);
                     }
                 }
+                _stoppedTcs.TrySetResult(null);
             }
             catch (Exception e)
             {
@@ -160,7 +160,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             finally
             {
                 Cleanup();
-                _stoppedTcs.SetResult(null);
             }
         }
     }

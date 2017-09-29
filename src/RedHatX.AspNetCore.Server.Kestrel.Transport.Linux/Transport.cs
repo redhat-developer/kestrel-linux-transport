@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -87,6 +88,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         if (_endPoint.Type == ListenType.SocketPath)
                         {
                             socket = Socket.Create(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+                            File.Delete(_endPoint.SocketPath);
                             socket.Bind(_endPoint.SocketPath);
                             socket.Listen(ListenBacklog);
                         }
