@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Pipelines;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Protocols;
@@ -308,6 +309,55 @@ namespace Tests
                     } while (!eof);
                     Assert.True(totalReceived == sendLength);
                 }
+            }
+        }
+
+        [Fact]
+        public async Task UnixSocketListenType()
+        {
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            {
+                int threadId = Thread.CurrentThread.ManagedThreadId;
+                var data = Encoding.UTF8.GetBytes(threadId.ToString());
+
+                var buffer = output.Alloc(data.Length);
+                buffer.Write(data);;
+                await buffer.FlushAsync();
+
+                output.Complete();
+                input.Complete();
+            };
+
+            using (var testServer = new TestServer(new TestServerOptions()
+                                        { ConnectionHandler = connectionHandler,
+                                        ThreadCount = 2,
+                                        UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}" }))
+            {
+                await testServer.BindAsync();
+
+                int[] threadIds = new int[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    using (var client = testServer.ConnectTo())
+                    {
+                        byte[] receiveBuffer = new byte[10];
+                        int received = client.Receive(new ArraySegment<byte>(receiveBuffer));
+                        int threadId;
+                        Assert.NotEqual(0, received);
+                        Assert.True(int.TryParse(Encoding.UTF8.GetString(receiveBuffer, 0, received), out threadId));
+                        threadIds[i] = threadId;
+
+                        // check if the server closed the client.
+                        // this would fail if not all fds for this client are closed
+                        received = client.Receive(new ArraySegment<byte>(receiveBuffer));
+                        Assert.Equal(0, received);
+                    }
+                }
+
+                // check we are doing round robin over 2 handling threads
+                Assert.NotEqual(threadIds[0], threadIds[1]);
+                Assert.Equal(threadIds[0], threadIds[2]);
+                Assert.Equal(threadIds[1], threadIds[3]);
             }
         }
 

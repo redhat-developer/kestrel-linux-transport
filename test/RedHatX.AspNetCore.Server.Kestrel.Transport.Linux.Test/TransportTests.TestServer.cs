@@ -18,37 +18,30 @@ namespace Tests
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
         public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
+        public string UnixSocketPath { get; set; }
     }
 
     class TestServer : IConnectionHandler, IDisposable
     {
         private Transport _transport;
         private IPEndPoint _serverAddress;
+        private string _unixSocketPath;
         private TestServerConnectionHandler _connectionHandler;
 
         private class EndPointInfo : IEndPointInformation
         {
-            private IPEndPoint _ipEndPoint;
-
-            public EndPointInfo(IPEndPoint ipEndPoint)
-            {
-                _ipEndPoint = ipEndPoint;
-            }
-
-            public ListenType Type { get => ListenType.IPEndPoint; }
-            public IPEndPoint IPEndPoint { get => _ipEndPoint; set { } }
-            public string SocketPath { get => null; }
+            public ListenType Type { get; set; }
+            public IPEndPoint IPEndPoint { get; set; }
+            public string SocketPath { get; set; }
             public ulong FileHandle { get => 0; }
             public FileHandleType HandleType { get => FileHandleType.Auto; set { } }
             public bool NoDelay { get => true; }
-
         }
 
         public TestServer(TestServerOptions options = null)
         {
             options = options ?? new TestServerOptions();
             _connectionHandler = options.ConnectionHandler;
-            _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
             var transportOptions = new LinuxTransportOptions()
             {
                 ThreadCount = options.ThreadCount,
@@ -56,7 +49,26 @@ namespace Tests
             };
             var loggerFactory = new LoggerFactory();
             loggerFactory.AddConsole((n, l) => false);
-            _transport = new Transport(new EndPointInfo(_serverAddress), this, transportOptions, loggerFactory);
+            IEndPointInformation endPoint = null;
+            if (options.UnixSocketPath != null)
+            {
+                _unixSocketPath = options.UnixSocketPath;
+                endPoint = new EndPointInfo
+                {
+                    Type = ListenType.SocketPath,
+                    SocketPath = _unixSocketPath
+                };
+            }
+            else
+            {
+                _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
+                endPoint = new EndPointInfo
+                {
+                    Type = ListenType.IPEndPoint,
+                    IPEndPoint = _serverAddress
+                };
+            }
+            _transport = new Transport(endPoint, this, transportOptions, loggerFactory);
         }
 
         public TestServer(TestServerConnectionHandler connectionHandler) :
@@ -146,10 +158,23 @@ namespace Tests
 
         public Socket ConnectTo()
         {
-            var client = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
-            client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
-            client.Connect(_serverAddress);
-            return client;
+            if (_unixSocketPath != null)
+            {
+                var client = Socket.Create(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: true);
+                client.Connect(_unixSocketPath);
+                return client;
+            }
+            else if (_serverAddress != null)
+            {
+                var client = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+                client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                client.Connect(_serverAddress);
+                return client;
+            }
+            else
+            {
+                return null;
+            }
         }
     }
 }

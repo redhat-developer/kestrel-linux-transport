@@ -146,6 +146,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
         }
 
+        public void Connect(string unixPath)
+        {
+            TryConnect(unixPath)
+                .ThrowOnError();
+        }
+
+        public unsafe PosixResult TryConnect(string unixPath)
+        {
+            UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
+            return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(UnixSocketAddress));
+        }
+
         public void Listen(int backlog)
         {
             TryListen(backlog)
