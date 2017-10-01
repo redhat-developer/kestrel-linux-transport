@@ -264,5 +264,67 @@ namespace Tests
             // Close
             serverSocket.Dispose();
         }
+
+        [Fact]
+        public void SocketPair()
+        {
+            SocketPair pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+            PosixResult result;
+
+            // Send
+            result = pair.Socket1.TrySend(s_data);
+
+            // Receive
+            byte[] receiveBuffer = new byte[10];
+            result = pair.Socket2.TryReceive(new ArraySegment<byte>(receiveBuffer));
+            Assert.True(result.IsSuccess);
+            Assert.Equal(s_data.Count, result.Value);
+
+            // Close
+            pair.Dispose();
+        }
+
+        [Fact]
+        public void PassHandle()
+        {
+            PosixResult result;
+
+            // server socket
+            var serverSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var serverAddress = new IPEndPointStruct(IPAddress.Loopback, 0);
+            serverSocket.Bind(serverAddress);
+            serverAddress = serverSocket.GetLocalIPAddress();
+            serverSocket.Listen(10);
+
+            // client connect
+            var clientSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            clientSocket.TryConnect(serverAddress);
+
+            // accept and pass socket
+            SocketPair pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+            result = serverSocket.TryAcceptAndSendHandleTo(pair.Socket1);
+            Assert.True(result.IsSuccess);
+            
+            // receive accept socket
+            Socket acceptSocket;
+            result = pair.Socket2.TryReceiveSocket(out acceptSocket, blocking: true);
+            Assert.True(result.IsSuccess);
+            Assert.Equal(1, result.Value);
+
+            // Send
+            result = clientSocket.TrySend(s_data);
+
+            // Receive
+            byte[] receiveBuffer = new byte[10];
+            result = acceptSocket.TryReceive(new ArraySegment<byte>(receiveBuffer));
+            Assert.True(result.IsSuccess);
+            Assert.Equal(s_data.Count, result.Value);
+
+            // Close
+            pair.Dispose();
+            serverSocket.Dispose();
+            clientSocket.Dispose();
+            acceptSocket.Dispose();
+        }
     }
 }
