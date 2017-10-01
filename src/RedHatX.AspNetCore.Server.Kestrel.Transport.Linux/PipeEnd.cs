@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    struct PipeEndPair : IDisposable
+    struct PipeEndPair
     {
         public PipeEnd ReadEnd;
         public PipeEnd WriteEnd;

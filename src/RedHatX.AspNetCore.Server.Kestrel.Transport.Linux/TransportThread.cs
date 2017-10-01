@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    sealed partial class TransportThread
+    sealed partial class TransportThread : ITransportActionHandler
     {
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
         // 128 IOVectors, take up 2KB of stack, can send up to 512KB
@@ -53,6 +53,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private readonly int _threadId;
         private readonly IPEndPoint _endPoint;
         private readonly LinuxTransportOptions _transportOptions;
+        private readonly AcceptThread _acceptThread;
         private readonly ILoggerFactory _loggerFactory;
         private readonly object _gate = new object();
         private int _cpuId;
@@ -62,7 +63,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private TaskCompletionSource<object> _stateChangeCompletion;
         private ThreadContext _threadContext;
 
-        public TransportThread(IPEndPoint endPoint, IConnectionHandler connectionHandler, LinuxTransportOptions options, int threadId, int cpuId, ILoggerFactory loggerFactory)
+        public TransportThread(IPEndPoint endPoint, IConnectionHandler connectionHandler, LinuxTransportOptions options, AcceptThread acceptThread, int threadId, int cpuId, ILoggerFactory loggerFactory)
         {
             if (connectionHandler == null)
             {
@@ -73,10 +74,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             _cpuId = cpuId;
             _endPoint = endPoint;
             _transportOptions = options;
+            _acceptThread = acceptThread;
             _loggerFactory = loggerFactory;
         }
 
-        public Task StartAsync()
+        public Task BindAsync()
         {
             TaskCompletionSource<object> tcs;
             lock (_gate)
@@ -110,17 +112,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return tcs.Task;
         }
 
-        private static void AcceptOn(IPEndPoint endPoint, int cpuId, LinuxTransportOptions transportOptions, ThreadContext threadContext)
+        private static Socket CreateAcceptSocket(IPEndPoint endPoint, LinuxTransportOptions transportOptions, int cpuId, ThreadContext threadContext, ref SocketFlags flags)
         {
             Socket acceptSocket = null;
-            int fd = 0;
             int port = endPoint.Port;
-            SocketFlags flags = SocketFlags.TypeAccept;
             try
             {
                 bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
                 acceptSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false);
-                fd = acceptSocket.DangerousGetHandle().ToInt32();
                 if (!ipv4)
                 {
                     // Kestrel does mapped ipv4 by default.
@@ -155,14 +154,21 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
 
                 acceptSocket.Listen(ListenBacklog);
+
+                endPoint.Port = port;
+                return acceptSocket;
             }
             catch
             {
                 acceptSocket?.Dispose();
                 throw;
             }
+        }
 
+        private static void AcceptOn(Socket acceptSocket, SocketFlags flags, ThreadContext threadContext)
+        {
             TSocket tsocket = null;
+            int fd = acceptSocket.DangerousGetHandle().ToInt32();
             var sockets = threadContext.Sockets;
             try
             {
@@ -194,10 +200,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 throw;
             }
-            endPoint.Port = port;
         }
 
-        public async Task CloseAcceptAsync()
+        public async Task UnbindAsync()
         {
             TaskCompletionSource<object> tcs = null;
             lock (_gate)
@@ -223,7 +228,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             try
             {
-                await StartAsync();
+                await BindAsync();
             }
             catch
             {}
@@ -278,7 +283,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            await CloseAcceptAsync();
+            await UnbindAsync();
 
             TaskCompletionSource<object> tcs = null;
             bool triggerStateChange = false;
@@ -348,8 +353,21 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                             threadContext.PipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
                                             EPollEvents.Readable,
                                             EPollData(pipeKey));
+
+                    Socket acceptSocket;
+                    SocketFlags flags;
+                    if (_acceptThread != null)
+                    {
+                        flags = SocketFlags.TypePassFd;
+                        acceptSocket = _acceptThread.CreateReceiveSocket();
+                    }
+                    else
+                    {
+                        flags = SocketFlags.TypeAccept;
+                        acceptSocket = CreateAcceptSocket(_endPoint, _transportOptions, _cpuId, threadContext, ref flags);
+                    }
                     // accept connections
-                    AcceptOn(_endPoint, _cpuId, _transportOptions, threadContext);
+                    AcceptOn(acceptSocket, flags, threadContext);
 
                     _threadContext = threadContext;
                 }
@@ -493,13 +511,31 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        private static readonly IPAddress NotIPSocket = IPAddress.None;
+
         private static int HandleAccept(TSocket tacceptSocket, ThreadContext threadContext)
         {
-            // TODO: should we handle more than 1 accept? If we do, we shouldn't be to eager
-            //       as that might give the kernel the impression we have nothing to do
-            //       which could interfere with the SO_REUSEPORT load-balancing.
+            var type = tacceptSocket.Flags & SocketFlags.TypeMask;
             Socket clientSocket;
-            var result = tacceptSocket.Socket.TryAccept(out clientSocket, blocking: false);
+            PosixResult result;
+            if (type == SocketFlags.TypeAccept)
+            {
+                // TODO: should we handle more than 1 accept? If we do, we shouldn't be to eager
+                //       as that might give the kernel the impression we have nothing to do
+                //       which could interfere with the SO_REUSEPORT load-balancing.
+                result = tacceptSocket.Socket.TryAccept(out clientSocket, blocking: false);
+            }
+            else
+            {
+                result = tacceptSocket.Socket.TryReceiveSocket(out clientSocket, blocking: false);
+                if (result.Value == 0)
+                {
+                    // The socket passing us file descriptors has closed.
+                    // We dispose our end so we get get removed from the epoll.
+                    tacceptSocket.Socket.Dispose();
+                    return 0;
+                }
+            }
             if (result.IsSuccess)
             {
                 int fd;
@@ -508,11 +544,23 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     fd = clientSocket.DangerousGetHandle().ToInt32();
 
+                    bool ipSocket = !object.ReferenceEquals(tacceptSocket.LocalAddress, NotIPSocket);
+
                     // Store the last LocalAddress on the tacceptSocket so we might reuse it instead
                     // of allocating a new one for the same address.
-                    var localAddress = clientSocket.GetLocalIPAddress(tacceptSocket.LocalAddress);
-                    tacceptSocket.LocalAddress = localAddress.Address;
-                    var remoteAddress = clientSocket.GetPeerIPAddress();
+                    IPEndPointStruct localAddress = default(IPEndPointStruct);
+                    IPEndPointStruct remoteAddress = default(IPEndPointStruct);
+                    if (ipSocket && clientSocket.TryGetLocalIPAddress(out localAddress, tacceptSocket.LocalAddress))
+                    {
+                        tacceptSocket.LocalAddress = localAddress.Address;
+                        clientSocket.TryGetPeerIPAddress(out remoteAddress);
+                    }
+                    else
+                    {
+                        // This is not an IP socket.
+                        tacceptSocket.LocalAddress = NotIPSocket;
+                        ipSocket = false;
+                    }
 
                     tsocket = new TSocket(threadContext)
                     {
@@ -525,7 +573,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         LocalPort = localAddress.Port
                     };
 
-                    clientSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                    if (ipSocket)
+                    {
+                        clientSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                    }
                 }
                 catch
                 {

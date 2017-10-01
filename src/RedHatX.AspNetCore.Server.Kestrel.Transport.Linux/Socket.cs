@@ -10,6 +10,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public void* Count;
     }
 
+    struct SocketPair
+    {
+        public Socket Socket1;
+        public Socket Socket2;
+
+        public void Dispose()
+        {
+            Socket1?.Dispose();
+            Socket2?.Dispose();
+        }
+    }
+
     static class SocketInterop
     {
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Socket")]
@@ -57,12 +69,25 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Duplicate")]
         public static extern PosixResult Duplicate(Socket socket, out Socket dup);
+
+        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_SocketPair")]
+        public static extern PosixResult SocketPair(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking, out Socket socket1, out Socket socket2);
+
+        [DllImport(Interop.Library, EntryPoint="RHXKL_ReceiveHandle")]
+        public extern static PosixResult ReceiveSocket(Socket fromSocket, out Socket socket, bool blocking);
+
+        [DllImport(Interop.Library, EntryPoint="RHXKL_AcceptAndSendHandleTo")]
+        public extern static PosixResult AcceptAndSendHandleTo(Socket fromSocket, SafeHandle toSocket);
     }
 
     // Warning: Some operations use DangerousGetHandle for increased performance
     class Socket : CloseSafeHandle
     {
         private Socket()
+        {}
+
+        public Socket(int handle) :
+            base(handle)
         {}
 
         public static Socket Create(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking)
@@ -83,6 +108,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public PosixResult TryGetAvailableBytes()
         {
             return SocketInterop.GetAvailableBytes(this);
+        }
+
+        public void Bind(string unixPath)
+        {
+            TryBind(unixPath)
+                .ThrowOnError();
+        }
+
+        public unsafe PosixResult TryBind(string unixPath)
+        {
+            UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
+            return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(UnixSocketAddress));
         }
 
         public void Bind(IPEndPointStruct endpoint)
@@ -107,6 +144,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
             return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
+        }
+
+        public void Connect(string unixPath)
+        {
+            TryConnect(unixPath)
+                .ThrowOnError();
+        }
+
+        public unsafe PosixResult TryConnect(string unixPath)
+        {
+            UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
+            return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(UnixSocketAddress));
         }
 
         public void Listen(int backlog)
@@ -306,6 +355,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new ArgumentOutOfRangeException(nameof(segment));
             }
+        }
+
+        public static SocketPair CreatePair(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking)
+        {
+            Socket socket1;
+            Socket socket2;
+            var result = SocketInterop.SocketPair(addressFamily, socketType, protocolType, blocking, out socket1, out socket2);
+            return new SocketPair { Socket1 = socket1, Socket2 = socket2 };
+        }
+
+        public unsafe PosixResult TryReceiveSocket(out Socket socket, bool blocking)
+        {
+            return SocketInterop.ReceiveSocket(this, out socket, blocking);
+        }
+
+        public unsafe PosixResult TryAcceptAndSendHandleTo(Socket toSocket)
+        {
+            return SocketInterop.AcceptAndSendHandleTo(this, toSocket);
         }
     }
 }
