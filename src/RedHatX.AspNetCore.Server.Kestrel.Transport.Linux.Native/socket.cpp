@@ -998,11 +998,10 @@ PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_
 
     if (rv != -1)
     {
-        rv = 0;
         for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != NULL; cmsg = CMSG_NXTHDR(&header,cmsg))
         {
-            if (cmsg->cmsg_level == SOL_SOCKET
-                    && cmsg->cmsg_type == SCM_RIGHTS) {
+            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
+            {
                 int *fdptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
                 int receiveFd = *fdptr;
 
@@ -1018,7 +1017,6 @@ PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_
                 fcntl(receiveFd, F_SETFL, flags);
 
                 *receiveHandle = receiveFd;
-                rv = 1;
                 break;
             }
         }

@@ -149,11 +149,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static int s_threadId = 0;
 
-        private AcceptThread CreateAcceptThread(Socket acceptSocket)
-        {
-            return null;
-        }
-
         private TransportThread[] CreateTransportThreads(IPEndPoint ipEndPoint, AcceptThread acceptThread)
         {
             var threads = new TransportThread[_transportOptions.ThreadCount];
