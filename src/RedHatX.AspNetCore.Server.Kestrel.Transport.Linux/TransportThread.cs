@@ -707,7 +707,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     continue;
                 }
                 var bufferHandle = memory.Retain(pin: true);
-                ioVectors[i].Base = bufferHandle.PinnedPointer;
+                ioVectors[i].Base = bufferHandle.Pointer;
                 // It's ok to unpin the handle here because the memory is from the pool
                 // we created, which is already pinned.
                 bufferHandle.Dispose();
@@ -833,7 +833,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var memory = wb.Buffer;
                 var length = memory.Length;
                 var bufferHandle = memory.Retain(pin: true);
-                ioVectors[ioVectorsUsed].Base = bufferHandle.PinnedPointer;
+                ioVectors[ioVectorsUsed].Base = bufferHandle.Pointer;
                 ioVectors[ioVectorsUsed].Count = (void*)length;
                 // It's ok to unpin the handle here because the memory is from the pool
                 // we created, which is already pinned.

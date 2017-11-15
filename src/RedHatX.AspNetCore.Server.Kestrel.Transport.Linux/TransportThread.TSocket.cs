@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -112,7 +113,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 continuation?.Invoke();
             }
 
-            public override PipeFactory PipeFactory => ThreadContext.PipeFactory;
+            public override BufferPool BufferPool => ThreadContext.BufferPool;
 
             public override IScheduler InputWriterScheduler => InlineScheduler.Default;
 

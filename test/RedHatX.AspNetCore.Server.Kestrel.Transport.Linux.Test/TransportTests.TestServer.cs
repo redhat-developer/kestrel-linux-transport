@@ -1,6 +1,8 @@
 using System;
+using System.Buffers;
 using System.IO.Pipelines;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Protocols.Features;
@@ -93,9 +95,9 @@ namespace Tests
         public void OnConnection(IFeatureCollection features)
         {
             var transportFeature = features.Get<IConnectionTransportFeature>();
-            var factory = transportFeature.PipeFactory;
-            var input = factory.Create(GetInputPipeOptions(transportFeature.InputWriterScheduler));
-            var output = factory.Create(GetOutputPipeOptions(transportFeature.OutputReaderScheduler));
+            var bufferPool = transportFeature.BufferPool;
+            var input = new Pipe(GetInputPipeOptions(bufferPool, transportFeature.InputWriterScheduler));
+            var output = new Pipe(GetOutputPipeOptions(bufferPool, transportFeature.OutputReaderScheduler));
 
             _connectionHandler(input.Reader, output.Writer);
 
@@ -107,21 +109,23 @@ namespace Tests
         private const long _maxRequestBufferSize = 1024 * 1024;
         private const long _maxResponseBufferSize = 64 * 1024;
 
-        private PipeOptions GetInputPipeOptions(IScheduler writerScheduler) => new PipeOptions
-        {
-            ReaderScheduler = InlineScheduler.Default, // _serviceContext.ThreadPool,
-            WriterScheduler = writerScheduler,
-            MaximumSizeHigh = _maxRequestBufferSize,
-            MaximumSizeLow = _maxRequestBufferSize
-        };
+        private PipeOptions GetInputPipeOptions(BufferPool bufferPool, IScheduler writerScheduler) => new PipeOptions
+        (
+            bufferPool: bufferPool,
+            readerScheduler: InlineScheduler.Default,
+            writerScheduler: writerScheduler,
+            maximumSizeHigh: _maxRequestBufferSize,
+            maximumSizeLow: _maxRequestBufferSize
+        );
 
-        private PipeOptions GetOutputPipeOptions(IScheduler readerScheduler) => new PipeOptions
-        {
-            ReaderScheduler = readerScheduler,
-            WriterScheduler = InlineScheduler.Default, // _serviceContext.ThreadPool,
-            MaximumSizeHigh = _maxResponseBufferSize,
-            MaximumSizeLow = _maxResponseBufferSize
-        };
+        private PipeOptions GetOutputPipeOptions(BufferPool bufferPool, IScheduler readerScheduler) => new PipeOptions
+        (
+            bufferPool: bufferPool,
+            readerScheduler: readerScheduler,
+            writerScheduler: InlineScheduler.Default,
+            maximumSizeHigh: _maxResponseBufferSize,
+            maximumSizeLow: _maxResponseBufferSize
+        );
 
         public void Dispose()
         {

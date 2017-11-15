@@ -367,7 +367,7 @@ namespace Tests
             {
                 wb.Ensure(4);
                 var bufferHandle = wb.Buffer.Retain(pin: true);
-                void* pointer = bufferHandle.PinnedPointer;
+                void* pointer = bufferHandle.Pointer;
                 *(int*)pointer = i;
                 bufferHandle.Dispose();
                 wb.Advance(4);
@@ -407,7 +407,7 @@ namespace Tests
             foreach (var memory in buffer)
             {
                 var bufferHandle = memory.Retain(pin: true);
-                void* pointer = bufferHandle.PinnedPointer;
+                void* pointer = bufferHandle.Pointer;
                 byte* pMemory = (byte*)pointer;
                 int length = memory.Length;
 

@@ -1,11 +1,12 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Pipelines;
 using System.Threading;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
-using System.IO;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -32,7 +33,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // These members need to be Disposed
                 EPoll = EPoll.Create();
                 EPollFd = EPoll.DangerousGetHandle().ToInt32();
-                PipeFactory = new PipeFactory();
+                BufferPool = new MemoryPool();
                 PipeEnds = PipeEnd.CreatePair(blocking: false);
             }
 
@@ -45,7 +46,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly TransportThread TransportThread;
             // key is the file descriptor
             public readonly Dictionary<int, TSocket> Sockets;
-            public PipeFactory PipeFactory;
+            public BufferPool BufferPool;
             public readonly List<TSocket> AcceptSockets;
 
             private EPoll EPoll;
@@ -137,7 +138,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 EPoll?.Dispose();
                 PipeEnds.Dispose();
-                PipeFactory?.Dispose();
+                BufferPool?.Dispose();
             }
 
             public void RemoveSocket(int tsocketKey)
