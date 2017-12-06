@@ -24,10 +24,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private const int EventBufferLength = 512;
         private const int EPollBlocked      = 1;
         private const int EPollNotBlocked   = 0;
-        // Highest bit set in EPollData for writable poll
-        // the remaining bits of the EPollData are the key
-        // of the _sockets dictionary.
-        private const int DupKeyMask          = 1 << 31;
         private const byte PipeStopThread     = 0;
         private const byte PipeActionsPending = 1;
         private const byte PipeStopSockets    = 2;
@@ -384,6 +380,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var acceptableSockets = new List<TSocket>(1);
                 var readableSockets = new List<TSocket>(EventBufferLength);
                 var writableSockets = new List<TSocket>(EventBufferLength);
+                var reregisterEventSockets = new List<TSocket>(EventBufferLength);
                 bool pipeReadable = false;
 
                 CompleteStateChange(State.Started);
@@ -415,22 +412,39 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             // 2:Int2 = Key   ==    Int1 = Key
                             // 3:~~~~~~~~~~         Int2 = Key
                             //                      ~~~~~~~~~~
+                            EPollEvents events = (EPollEvents)ptr[0];
                             int key = ptr[2];
                             ptr += 3 + notPacked;
                             TSocket tsocket;
-                            if (sockets.TryGetValue(key & ~DupKeyMask, out tsocket))
+                            if (sockets.TryGetValue(key, out tsocket))
                             {
                                 var type = tsocket.Flags & SocketFlags.TypeMask;
                                 if (type == SocketFlags.TypeClient)
                                 {
-                                    bool read = (key & DupKeyMask) == 0;
-                                    if (read)
+                                    if ((events & EPollEvents.Error) != EPollEvents.None)
                                     {
-                                        readableSockets.Add(tsocket);
+                                        events |= EPollEvents.Readable | EPollEvents.Writable;
                                     }
-                                    else
+                                    lock (tsocket.EventLock)
                                     {
-                                        writableSockets.Add(tsocket);
+                                        var pendingEvents = tsocket.PendingEvents;
+                                        events &= pendingEvents & (EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error);
+                                        if ((events & EPollEvents.Readable) != EPollEvents.None)
+                                        {
+                                            readableSockets.Add(tsocket);
+                                            pendingEvents &= ~EPollEvents.Readable;
+                                        }
+                                        if ((events & EPollEvents.Writable) != EPollEvents.None)
+                                        {
+                                            writableSockets.Add(tsocket);
+                                            pendingEvents &= ~EPollEvents.Writable;
+                                        }
+                                        tsocket.PendingEvents = pendingEvents;
+                                        if ((pendingEvents & (EPollEvents.Readable | EPollEvents.Writable)) != EPollEvents.None)
+                                        {
+                                            tsocket.PendingEvents |= TSocket.EventControlPending;
+                                            reregisterEventSockets.Add(tsocket);
+                                        }
                                     }
                                 }
                                 else
@@ -469,6 +483,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         readableSockets[i].CompleteReadable();
                     }
                     readableSockets.Clear();
+
+                    // reregister for events
+                    for (int i = 0; i < reregisterEventSockets.Count; i++)
+                    {
+                        var tsocket = reregisterEventSockets[i];
+                        lock (tsocket.EventLock)
+                        {
+                            var pendingEvents = tsocket.PendingEvents & ~TSocket.EventControlPending;
+                            tsocket.PendingEvents = pendingEvents;
+                            UpdateEPollControl(tsocket, pendingEvents, registered: true);
+                        }
+                    }
+                    reregisterEventSockets.Clear();
 
                     // handle pipe
                     if (pipeReadable)
@@ -724,35 +751,37 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static WritableAwaitable Writable(TSocket tsocket) => new WritableAwaitable(tsocket);
 
-        private static void RegisterForWritable(TSocket tsocket)
-        {
-            bool registered = tsocket.DupSocket != null;
-            // To avoid having to synchronize the event mask with the Readable
-            // we dup the socket.
-            // In the EPollData we set the highest bit to indicate this is the
-            // poll for writable.
-            if (!registered)
-            {
-                tsocket.DupSocket = tsocket.Socket.Duplicate();
-            }
-            EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
-                                      registered ? EPollOperation.Modify : EPollOperation.Add,
-                                      tsocket.DupSocket.DangerousGetHandle().ToInt32(),
-                                      EPollEvents.Writable | EPollEvents.OneShot,
-                                      EPollData(tsocket.Fd | DupKeyMask));
-        }
-
+        private static void RegisterForWritable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Writable);
 
         private static ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket);
 
-        private static void RegisterForReadable(TSocket tsocket)
+        private static void RegisterForReadable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Readable);
+
+        private static void RegisterFor(TSocket tsocket, EPollEvents ev)
         {
-            bool register = tsocket.SetRegistered();
+            lock (tsocket.EventLock)
+            {
+                var pendingEvents = tsocket.PendingEvents;
+                bool registered = (pendingEvents & TSocket.EventControlRegistered) != EPollEvents.None;
+                pendingEvents |= TSocket.EventControlRegistered | ev;
+                tsocket.PendingEvents = pendingEvents;
+
+                if ((pendingEvents & TSocket.EventControlPending) == EPollEvents.None)
+                {
+                    UpdateEPollControl(tsocket, pendingEvents, registered);
+                }
+            }
+        }
+
+        // must be called under tsocket.EventLock
+        private static void UpdateEPollControl(TSocket tsocket, EPollEvents flags, bool registered)
+        {
+            flags &= EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error;
             EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
-                                      register ? EPollOperation.Add : EPollOperation.Modify,
-                                      tsocket.Fd,
-                                      EPollEvents.Readable | EPollEvents.OneShot,
-                                      EPollData(tsocket.Fd));
+                        registered ? EPollOperation.Modify : EPollOperation.Add,
+                        tsocket.Fd,
+                        flags | EPollEvents.OneShot,
+                        EPollData(tsocket.Fd));
         }
 
         private static async void ReadFromSocket(TSocket tsocket, bool dataMayBeAvailable)
@@ -917,7 +946,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // We get here when both reading and writing has stopped
                 // so we are sure this is the last use of the Socket.
                 tsocket.Socket.Dispose();
-                tsocket.DupSocket?.Dispose();
             }
         }
 

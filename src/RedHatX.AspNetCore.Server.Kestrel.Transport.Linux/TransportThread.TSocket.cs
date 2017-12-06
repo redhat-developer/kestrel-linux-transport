@@ -15,8 +15,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             None            = 0,
 
-            EPollRegistered = 0x01,
-
             CloseEnd        = 0x02,
             BothClosed      = 0x04,
 
@@ -43,18 +41,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 set { _flags = (int)value; }
             }
 
-            public bool SetRegistered()
-            {
-                if ((_flags & (int)SocketFlags.EPollRegistered) != 0)
-                {
-                    return false;
-                }
-                else
-                {
-                    Interlocked.Add(ref _flags, (int)SocketFlags.EPollRegistered);
-                    return true;
-                }
-            }
+            public const EPollEvents EventControlRegistered = EPollEvents.HangUp;
+            public const EPollEvents EventControlPending = EPollEvents.OneShot;
+
+
+            public EPollEvents PendingEvents;
+            public readonly object EventLock = new object();
 
             public bool CloseEnd()
             {
@@ -65,7 +57,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public ThreadContext ThreadContext;
             public int         Fd;
             public Socket      Socket;
-            public Socket      DupSocket;
 
             private Action _writableCompletion;
             public bool SetWritableContinuation(Action continuation)
