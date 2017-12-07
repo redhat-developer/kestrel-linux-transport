@@ -706,7 +706,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         if (!buffer.IsEmpty)
                         {
                             bool zerocopy = buffer.Length >= tsocket.ZeroCopyThreshold;
-                            var result = TrySend(tsocket.Fd, zerocopy, ref buffer);
+                            (PosixResult result, bool zerocopyRegistered) = TrySend(tsocket, zerocopy, ref buffer);
                             if (result.Value == buffer.Length)
                             {
                                 end = buffer.End;
@@ -730,7 +730,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             }
                             if (result.Value > 0 && zerocopy)
                             {
-                                await ZeroCopyWritten(tsocket);
+                                await ZeroCopyWritten(tsocket, zerocopyRegistered);
                             }
                         }
                     }
@@ -754,8 +754,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe PosixResult TrySend(int fd, bool zerocopy, ref ReadableBuffer buffer)
+        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadableBuffer buffer)
         {
+            bool zeroCopyRegistered = false;
+            int fd = tsocket.Fd;
             int ioVectorLength = 0;
             foreach (var memory in buffer)
             {
@@ -772,7 +774,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             if (ioVectorLength == 0)
             {
-                return new PosixResult(0);
+                return (new PosixResult(0), zeroCopyRegistered);
             }
 
             var ioVectors = stackalloc IOVector[ioVectorLength];
@@ -796,7 +798,32 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     break;
                 }
             }
-            return SocketInterop.Send(fd, ioVectors, ioVectorLength, zerocopy ? MSG_ZEROCOPY : 0);
+
+            if (zerocopy)
+            {
+                // If we have a pending Readable event, it will report on the zero-copy completion too.
+                lock (tsocket.EventLock)
+                {
+                    if ((tsocket.PendingEvents & EPollEvents.Readable) != EPollEvents.None)
+                    {
+                        tsocket.PendingEvents |= EPollEvents.Error;
+                        zeroCopyRegistered = true;
+                    }
+                }
+            }
+
+            PosixResult rv = SocketInterop.Send(fd, ioVectors, ioVectorLength, zerocopy ? MSG_ZEROCOPY : 0);
+
+            if (zerocopy && rv.Value <= 0 && zeroCopyRegistered)
+            {
+                lock (tsocket.EventLock)
+                {
+                    tsocket.PendingEvents &= ~EPollEvents.Error;
+                }
+                zeroCopyRegistered = false;
+            }
+
+            return (rv, zeroCopyRegistered);
         }
 
         private static WritableAwaitable Writable(TSocket tsocket) => new WritableAwaitable(tsocket);
@@ -807,7 +834,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void RegisterForReadable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Readable);
 
-        private static ZeroCopyWrittenAwaitable ZeroCopyWritten(TSocket tsocket) => new ZeroCopyWrittenAwaitable(tsocket);
+        private static ZeroCopyWrittenAwaitable ZeroCopyWritten(TSocket tsocket, bool registered) => new ZeroCopyWrittenAwaitable(tsocket, registered);
 
         private static void RegisterForZeroCopyWritten(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Error);
 

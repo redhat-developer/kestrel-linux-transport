@@ -33,6 +33,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 ThreadContext = threadContext;
             }
             private static readonly Action _stopSentinel = delegate { };
+            private static readonly Action _completedSentinel = delegate { };
 
             private int _flags;
             public SocketFlags Flags
@@ -109,13 +110,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public bool SetZeroCopyWrittenContinuation(Action continuation)
             {
                 var oldValue = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, continuation, null);
-                return oldValue == null;
+                bool completed = oldValue != null;
+                if (completed) // _zeroCopyWrittenCompletion == _completedSentinel
+                {
+                    Volatile.Write(ref _zeroCopyWrittenCompletion, null);
+                    continuation();
+                }
+                return !completed;
             }
 
             public void CompleteZeroCopy()
             {
-                Action continuation = Interlocked.Exchange(ref _zeroCopyWrittenCompletion, null);
-                continuation.Invoke();
+                Action continuation = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, _completedSentinel, null);
+                bool completed = continuation != null;
+                if (completed) // _zeroCopyWrittenCompletion == continuation
+                {
+                    Volatile.Write(ref _zeroCopyWrittenCompletion, null);
+                    continuation();
+                }
             }
 
             public override BufferPool BufferPool => ThreadContext.BufferPool;
@@ -188,10 +200,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         struct ZeroCopyWrittenAwaitable: ICriticalNotifyCompletion
         {
             private readonly TSocket _tsocket;
+            private readonly bool _registered;
 
-            public ZeroCopyWrittenAwaitable(TSocket awaiter)
+            public ZeroCopyWrittenAwaitable(TSocket awaiter, bool registered)
             {
                 _tsocket = awaiter;
+                _registered = registered;
             }
 
             public bool IsCompleted => false;
@@ -206,11 +220,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 if (_tsocket.SetZeroCopyWrittenContinuation(continuation))
                 {
-                    TransportThread.RegisterForZeroCopyWritten(_tsocket);
-                }
-                else
-                {
-                    continuation();
+                    if (!_registered)
+                    {
+                        TransportThread.RegisterForZeroCopyWritten(_tsocket);
+                    }
                 }
             }
         }
