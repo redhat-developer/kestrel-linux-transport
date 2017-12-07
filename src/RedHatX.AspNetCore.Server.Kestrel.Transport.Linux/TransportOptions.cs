@@ -5,11 +5,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private int? _threadCount;
         private bool? _threadAffinity;
 
+        public const int NoZeroCopy = int.MaxValue;
+
         internal bool ReceiveOnIncomingCpu { get; set; } = false;
 
         public bool DeferAccept { get; set; } = true;
 
         public bool DeferSend { get; set; } = true;
+
+        public int ZeroCopyThreshold { get; set; } = 8 * 1024; // 8KB
+
+        public bool ZeroCopy { get; set; } = false;
 
         internal CpuSet CpuSet { get; set; }
 

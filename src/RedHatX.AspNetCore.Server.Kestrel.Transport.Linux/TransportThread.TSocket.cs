@@ -44,9 +44,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public const EPollEvents EventControlRegistered = EPollEvents.HangUp;
             public const EPollEvents EventControlPending = EPollEvents.OneShot;
 
-
             public EPollEvents PendingEvents;
             public readonly object EventLock = new object();
+
+            public int ZeroCopyThreshold;
 
             public bool CloseEnd()
             {
@@ -102,6 +103,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // unblock Readable (may race with CompleteReadable)
                 Action continuation = Interlocked.Exchange(ref _readableCompletion, _stopSentinel);
                 continuation?.Invoke();
+            }
+
+            private Action _zeroCopyWrittenCompletion;
+            public bool SetZeroCopyWrittenContinuation(Action continuation)
+            {
+                var oldValue = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, continuation, null);
+                return oldValue == null;
+            }
+
+            public void CompleteZeroCopy()
+            {
+                Action continuation = Interlocked.Exchange(ref _zeroCopyWrittenCompletion, null);
+                continuation.Invoke();
             }
 
             public override BufferPool BufferPool => ThreadContext.BufferPool;
@@ -163,6 +177,36 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 if (_tsocket.SetWritableContinuation(continuation))
                 {
                     TransportThread.RegisterForWritable(_tsocket);
+                }
+                else
+                {
+                    continuation();
+                }
+            }
+        }
+
+        struct ZeroCopyWrittenAwaitable: ICriticalNotifyCompletion
+        {
+            private readonly TSocket _tsocket;
+
+            public ZeroCopyWrittenAwaitable(TSocket awaiter)
+            {
+                _tsocket = awaiter;
+            }
+
+            public bool IsCompleted => false;
+
+            public void GetResult() { }
+
+            public ZeroCopyWrittenAwaitable GetAwaiter() => this;
+
+            public void UnsafeOnCompleted(Action continuation) => OnCompleted(continuation);
+
+            public void OnCompleted(Action continuation)
+            {
+                if (_tsocket.SetZeroCopyWrittenContinuation(continuation))
+                {
+                    TransportThread.RegisterForZeroCopyWritten(_tsocket);
                 }
                 else
                 {

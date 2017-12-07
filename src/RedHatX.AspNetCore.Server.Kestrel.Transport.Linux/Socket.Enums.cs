@@ -121,6 +121,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         ReusePort = 0x2001,
 
         IncomingCpu = 0x2002,
+
+        ZeroCopy = 0x2003,
         #endregion
 
         // The following values are taken from ws2tcpip.h,

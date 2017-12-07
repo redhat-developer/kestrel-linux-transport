@@ -10,9 +10,15 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <linux/errqueue.h>
+#include <linux/if_packet.h>
 
 #ifndef SO_INCOMING_CPU
 #define SO_INCOMING_CPU 49
+#endif
+
+#ifndef SO_ZEROCOPY
+#define SO_ZEROCOPY	60
 #endif
 
 struct PalSocketAddress
@@ -42,6 +48,13 @@ static_assert(OffsetOfIOVectorBase == OffsetOfIovecBase, "");
 static_assert(sizeof(decltype(IOVector::Count)) == sizeof(decltype(iovec::iov_len)), "");
 static_assert(OffsetOfIOVectorCount == OffsetOfIovecLen, "");
 
+enum ZeroCopyResult : int32_t
+{
+    PAL_ZEROCOPY_AGAIN = 0,
+    PAL_ZEROCOPY_COPIED = 1,
+    PAL_ZEROCOPY_SUCCESS = 2
+};
+
 extern "C"
 {
     PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* createdSocket);
@@ -51,7 +64,7 @@ extern "C"
     PosixResult RHXKL_Listen(intptr_t socket, int backlog);
     PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, intptr_t* acceptedSocket);
     PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown);
-    PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen);
+    PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen, int flags);
     PosixResult RHXKL_Receive(int socket, IOVector* ioVectors, int ioVectorLen);
     PosixResult RHXKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
     PosixResult RHXKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen);
@@ -61,6 +74,7 @@ extern "C"
     PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking);
     PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket);
     PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
+    ZeroCopyResult RHXKL_CompleteZeroCopy(int socket);
 }
 
 struct IPSocketAddress
@@ -179,6 +193,7 @@ enum SocketOptionName : int32_t
     // corefx controls this together with PAL_SO_REUSEADDR
     PAL_SO_REUSEPORT = 0x2001,
     PAL_SO_INCOMING_CPU = 0x2002,
+    PAL_SO_ZEROCOPY = 0x2003,
     
     // PAL_SO_MAXCONN = 0x7fffffff,
 
@@ -438,6 +453,10 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionName, int32_t socketO
 
                 case PAL_SO_INCOMING_CPU:
                     optName = SO_INCOMING_CPU;
+                    return true;
+
+                case PAL_SO_ZEROCOPY:
+                    optName = SO_ZEROCOPY;
                     return true;
 
                 default:
@@ -820,7 +839,7 @@ PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown)
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen)
+PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen, int flags)
 {
     if (ioVectors == nullptr || ioVectorLen <= 0)
     {
@@ -839,7 +858,7 @@ PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen)
         .msg_controllen = 0,
         .msg_flags = 0
     };
-    int flags = MSG_NOSIGNAL;
+    flags |= MSG_NOSIGNAL;
 
     int rv;
     while (CheckInterrupted(rv = static_cast<int>(sendmsg(fd, &header, flags))));
@@ -1112,4 +1131,48 @@ PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t 
     }
 
     return ToPosixResult(rv);   
+}
+
+ZeroCopyResult RHXKL_CompleteZeroCopy(int socket)
+{
+    struct msghdr msg = {};
+	char control[100];
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    int rv;
+    while (CheckInterrupted(rv = static_cast<int>(recvmsg(socket, &msg, MSG_NOSIGNAL | MSG_ERRQUEUE))));
+    if (rv == -1)
+    {
+        return PAL_ZEROCOPY_AGAIN;
+    }
+
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+    if (!cm)
+    {
+        return PAL_ZEROCOPY_AGAIN;
+    }
+
+	if (!((cm->cmsg_level == SOL_IP && cm->cmsg_type == IP_RECVERR) ||
+	      (cm->cmsg_level == SOL_IPV6 && cm->cmsg_type == IPV6_RECVERR)))
+    {
+        return PAL_ZEROCOPY_AGAIN;
+    }
+
+	struct sock_extended_err *serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cm));
+    if ((serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) ||
+        (serr->ee_errno != 0))
+    {
+        return PAL_ZEROCOPY_AGAIN;
+    }
+
+    int zerocopy = !(serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED);
+    if (zerocopy)
+    {
+        return PAL_ZEROCOPY_COPIED;
+    }
+    else
+    {
+        return PAL_ZEROCOPY_SUCCESS;
+    }
 }

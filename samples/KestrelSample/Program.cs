@@ -52,6 +52,7 @@ namespace SampleApp
                 Console.WriteLine("  General:");
                 Console.WriteLine("\tlibuv    Use libuv Transport instead of Linux Transport");
                 Console.WriteLine("\t-t<tc>   Number of transport threads");
+                Console.WriteLine("\t-z<th>   Threshold for using zero-copy");
                 Console.WriteLine("\tnott     Defer requests to thread pool");
                 Console.WriteLine("  Linux transport specific:");
                 // Console.WriteLine("\tta       Set thread affinity");
@@ -75,6 +76,7 @@ namespace SampleApp
             bool tt = !args.Contains("nott");
             _log = args.Contains("log");
             int threadCount = 0;
+            int zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
             // CpuSet cpuSet = default(CpuSet);
             foreach (var arg in args)
             {
@@ -87,6 +89,10 @@ namespace SampleApp
                 if (arg.StartsWith("-t"))
                 {
                     threadCount = int.Parse(arg.Substring(2));
+                }
+                else if (arg.StartsWith("-z"))
+                {
+                    zeroCopyThreshold = int.Parse(arg.Substring(2));
                 }
             }
             // if (ic)
@@ -107,7 +113,7 @@ namespace SampleApp
             else
             {
                 // Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
-                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}");
+                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}, ZeroCopyThreshold={zeroCopyThreshold}");
             }
 
             var hostBuilder = new WebHostBuilder()
@@ -130,6 +136,8 @@ namespace SampleApp
                     //options.ReceiveOnIncomingCpu = ic;
                     options.DeferAccept = da;
                     options.DeferSend = ds;
+                    options.ZeroCopyThreshold = zeroCopyThreshold;
+                    options.ZeroCopy = true;
                     //options.CpuSet = cpuSet;
                 });
             }

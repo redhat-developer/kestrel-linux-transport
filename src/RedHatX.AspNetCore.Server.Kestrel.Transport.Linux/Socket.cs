@@ -22,6 +22,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         }
     }
 
+    enum ZeroCopyResult : int
+    {
+        Again = 0,
+        Copied = 1,
+        Success = 2
+    }
+
     static class SocketInterop
     {
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Socket")]
@@ -46,9 +53,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public static extern PosixResult Shutdown(Socket socket, SocketShutdown shutdown);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Send")]
-        public static extern unsafe PosixResult Send(int socket, IOVector* ioVectors, int ioVectorLen);
-        public static unsafe PosixResult Send(SafeHandle socket, IOVector* ioVectors, int ioVectorLen)
-        => Send(socket.DangerousGetHandle().ToInt32(), ioVectors, ioVectorLen);
+        public static extern unsafe PosixResult Send(int socket, IOVector* ioVectors, int ioVectorLen, int flags = 0);
+        public static unsafe PosixResult Send(SafeHandle socket, IOVector* ioVectors, int ioVectorLen, int flags = 0)
+        => Send(socket.DangerousGetHandle().ToInt32(), ioVectors, ioVectorLen, flags);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Receive")]
         public static unsafe extern PosixResult Receive(int socket, IOVector* ioVectors, int ioVectorLen);
@@ -78,6 +85,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         [DllImport(Interop.Library, EntryPoint="RHXKL_AcceptAndSendHandleTo")]
         public extern static PosixResult AcceptAndSendHandleTo(Socket fromSocket, SafeHandle toSocket);
+
+        [DllImport(Interop.Library, EntryPoint="RHXKL_CompleteZeroCopy")]
+        public extern static ZeroCopyResult CompleteZeroCopy(int socket);
     }
 
     // Warning: Some operations use DangerousGetHandle for increased performance
