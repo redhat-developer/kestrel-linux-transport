@@ -59,6 +59,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public ThreadContext ThreadContext;
             public int         Fd;
             public Socket      Socket;
+            public Exception   OutputError;
 
             private Action _writableCompletion;
             public bool SetWritableContinuation(Action continuation)
@@ -80,6 +81,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Output.CancelPendingRead();
                 // unblock Writable (may race with CompleteWritable)
                 Action continuation = Interlocked.Exchange(ref _writableCompletion, _stopSentinel);
+                continuation?.Invoke();
+                // unblock ZeroCopyWritten (may race with CompleteZeroCopy)
+                continuation = Interlocked.Exchange(ref _zeroCopyWrittenCompletion, _stopSentinel);
                 continuation?.Invoke();
             }
 
@@ -110,25 +114,27 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public bool SetZeroCopyWrittenContinuation(Action continuation)
             {
                 var oldValue = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, continuation, null);
-                bool completed = oldValue != null;
-                if (completed) // _zeroCopyWrittenCompletion == _completedSentinel
+                bool completedOrCancelled = oldValue != null;
+                if (completedOrCancelled)
                 {
-                    Volatile.Write(ref _zeroCopyWrittenCompletion, null);
+                    Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, null, _completedSentinel);
                     continuation();
                 }
-                return !completed;
+                return !completedOrCancelled;
             }
 
             public void CompleteZeroCopy()
             {
                 Action continuation = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, _completedSentinel, null);
-                bool completed = continuation != null;
-                if (completed) // _zeroCopyWrittenCompletion == continuation
+                bool completedOrCancelled = continuation != null;
+                if (completedOrCancelled)
                 {
-                    Volatile.Write(ref _zeroCopyWrittenCompletion, null);
+                    Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, null, continuation);
                     continuation();
                 }
             }
+
+            public bool IsZeroCopyFinished() => !ReferenceEquals(_zeroCopyWrittenCompletion, _stopSentinel);
 
             public override BufferPool BufferPool => ThreadContext.BufferPool;
 
@@ -210,7 +216,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public bool IsCompleted => false;
 
-            public void GetResult() { }
+            public bool GetResult() => _tsocket.IsZeroCopyFinished();
 
             public ZeroCopyWrittenAwaitable GetAwaiter() => this;
 

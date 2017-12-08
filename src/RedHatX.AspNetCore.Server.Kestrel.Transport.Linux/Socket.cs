@@ -22,13 +22,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         }
     }
 
-    enum ZeroCopyResult : int
-    {
-        Again = 0,
-        Copied = 1,
-        Success = 2
-    }
-
     static class SocketInterop
     {
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Socket")]
@@ -87,7 +80,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public extern static PosixResult AcceptAndSendHandleTo(Socket fromSocket, SafeHandle toSocket);
 
         [DllImport(Interop.Library, EntryPoint="RHXKL_CompleteZeroCopy")]
-        public extern static ZeroCopyResult CompleteZeroCopy(int socket);
+        public extern static PosixResult CompleteZeroCopy(int socket);
+
+        [DllImport(Interop.Library, EntryPoint="RHXKL_CompleteZeroCopyBlocking")]
+        public extern static PosixResult CompleteZeroCopyBlocking(int socket, int timeout);
+
+        [DllImport(Interop.Library, EntryPoint="RHXKL_Disconnect")]
+        public extern static PosixResult Disconnect(int socket);
+
+        public const int ZeroCopyCopied = 0;
+        public const int ZeroCopySuccess = 1;
     }
 
     // Warning: Some operations use DangerousGetHandle for increased performance

@@ -337,7 +337,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private unsafe void PollThread(object obj)
         {
             ThreadContext threadContext = null;
-            Exception error = null;
             try
             {
                 // .NET doesn't support setting thread affinity on Start
@@ -443,14 +442,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                         if ((pendingHandlers & EPollEvents.Error & events) != EPollEvents.None)
                                         {
                                             var copyResult = SocketInterop.CompleteZeroCopy(tsocket.Fd);
-                                            if (copyResult != ZeroCopyResult.Again)
+                                            if (copyResult != PosixResult.EAGAIN)
                                             {
                                                 events &= ~EPollEvents.Error;
                                                 pendingHandlers &= ~EPollEvents.Error;
                                                 zeroCopyCompletions.Add(tsocket);
-                                                if (copyResult == ZeroCopyResult.Copied)
+                                                if (copyResult == SocketInterop.ZeroCopyCopied)
                                                 {
                                                     tsocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                                                }
+                                                else if (copyResult != SocketInterop.ZeroCopySuccess)
+                                                {
+                                                    Environment.FailFast($"Error occurred while trying to complete zero copy: {copyResult}");
                                                 }
                                             }
                                         }
@@ -569,7 +572,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             catch (Exception ex)
             {
-                error = ex;
+                Environment.FailFast("TransportThread", ex);
             }
             finally
             {
@@ -578,7 +581,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // so we are sure there are no more epoll users.
                 threadContext?.Dispose();
 
-                CompleteStateChange(State.Stopped, error);
+                CompleteStateChange(State.Stopped);
             }
         }
 
@@ -688,7 +691,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private static async void WriteToSocket(TSocket tsocket)
         {
             tsocket.Output.OnWriterCompleted(CompleteWriteToSocket, tsocket);
-            Exception error = null;
             try
             {
                 while (true)
@@ -725,12 +727,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             }
                             else
                             {
-                                error = result.AsException();
+                                tsocket.OutputError = result.AsException();
                                 break;
                             }
                             if (result.Value > 0 && zerocopy)
                             {
-                                await ZeroCopyWritten(tsocket, zerocopyRegistered);
+                                if (!await ZeroCopyWritten(tsocket, zerocopyRegistered))
+                                {
+                                    // Don't advance when the zero-copy hasn't finished
+                                    end = buffer.Start;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -743,12 +750,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             catch (Exception ex)
             {
-                error = ex;
+                tsocket.OutputError = ex;
             }
             finally
             {
                 tsocket.StopReadFromSocket();
-                tsocket.Output.Complete(error);
 
                 CleanupSocketEnd(tsocket);
             }
@@ -1015,13 +1021,36 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             } while (true);
         }
 
-        private static void CleanupSocketEnd(TSocket tsocket)
+        private static void CleanupSocketEnd(TSocket tsocket, bool pendingZeroCopy = false)
         {
+            int fd = tsocket.Fd;
             var bothClosed = tsocket.CloseEnd();
             if (bothClosed)
             {
+                bool completeZeroCopy = false;
+                lock (tsocket.EventLock)
+                {
+                    // terminate pending zero copy
+                    if ((tsocket.PendingEvents & EPollEvents.Error) != EPollEvents.None)
+                    {
+                        completeZeroCopy = true;
+                        // Disconnect under lock and clear Error to ensure the EPoll thread will not try to complete this.
+                        SocketInterop.Disconnect(fd);
+                        tsocket.PendingEvents &= ~EPollEvents.Error;
+                    }
+                }
+                if (completeZeroCopy)
+                {
+                    var result = SocketInterop.CompleteZeroCopyBlocking(fd, timeout: 60 * 1000 /* ms */);
+                    if (!result.IsSuccess)
+                    {
+                        Environment.FailFast($"Could not terminate pending zerocopy: {result}");
+                    }
+                }
+                tsocket.Output.Complete(tsocket.OutputError);
+
                 // First remove from the Dictionary, so we can't match with a new fd.
-                tsocket.ThreadContext.RemoveSocket(tsocket.Fd);
+                tsocket.ThreadContext.RemoveSocket(fd);
 
                 // We are not using SafeHandles to increase performance.
                 // We get here when both reading and writing has stopped

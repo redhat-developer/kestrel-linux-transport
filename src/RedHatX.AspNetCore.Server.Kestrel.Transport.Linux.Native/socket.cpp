@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <linux/errqueue.h>
 #include <linux/if_packet.h>
+#include <poll.h>
 
 #ifndef SO_INCOMING_CPU
 #define SO_INCOMING_CPU 49
@@ -48,13 +49,6 @@ static_assert(OffsetOfIOVectorBase == OffsetOfIovecBase, "");
 static_assert(sizeof(decltype(IOVector::Count)) == sizeof(decltype(iovec::iov_len)), "");
 static_assert(OffsetOfIOVectorCount == OffsetOfIovecLen, "");
 
-enum ZeroCopyResult : int32_t
-{
-    PAL_ZEROCOPY_AGAIN = 0,
-    PAL_ZEROCOPY_COPIED = 1,
-    PAL_ZEROCOPY_SUCCESS = 2
-};
-
 extern "C"
 {
     PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* createdSocket);
@@ -74,7 +68,9 @@ extern "C"
     PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking);
     PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket);
     PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
-    ZeroCopyResult RHXKL_CompleteZeroCopy(int socket);
+    PosixResult RHXKL_CompleteZeroCopy(int socket);
+    PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout);
+    PosixResult RHXKL_Disconnect(int fd);
 }
 
 struct IPSocketAddress
@@ -1133,46 +1129,95 @@ PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t 
     return ToPosixResult(rv);   
 }
 
-ZeroCopyResult RHXKL_CompleteZeroCopy(int socket)
+static const int ZeroCopyCopied = 0;
+static const int ZeroCopySuccess = 1;
+
+PosixResult RHXKL_CompleteZeroCopy(int socket)
 {
     struct msghdr msg = {};
 	char control[100];
-    msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
+
+    do
+    {
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+
+        int rv;
+        while (CheckInterrupted(rv = static_cast<int>(recvmsg(socket, &msg, MSG_NOSIGNAL | MSG_ERRQUEUE))));
+        if (rv == -1)
+        {
+            return ToPosixResult(rv);
+        }
+
+        struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+        if (!cm)
+        {
+            continue;
+        }
+
+        if (!((cm->cmsg_level == SOL_IP && cm->cmsg_type == IP_RECVERR) ||
+              (cm->cmsg_level == SOL_IPV6 && cm->cmsg_type == IPV6_RECVERR)))
+        {
+            continue;
+        }
+
+        struct sock_extended_err *serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cm));
+        if ((serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) ||
+            (serr->ee_errno != 0))
+        {
+            continue;
+        }
+
+        int zerocopy = !(serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED);
+        if (zerocopy)
+        {
+            return ToPosixResult(ZeroCopySuccess);
+        }
+        else
+        {
+            return ToPosixResult(ZeroCopyCopied);
+        }
+    } while (true);
+}
+
+PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout)
+{
+    struct pollfd fds =
+    {
+        .fd = socket,
+        .events = 0,
+        .revents = 0
+    };
+
+    PosixResult rv;
+    do
+    {
+        int pollRv;
+        while (CheckInterrupted(pollRv = static_cast<int>(poll(&fds, 1, timeout))));
+        if (poll(&fds, 1, -1) == 1)
+        {
+            rv = RHXKL_CompleteZeroCopy(socket);
+        }
+        else
+        {
+            if (pollRv == 0)
+            {
+                pollRv = -1;
+                errno = ETIME;
+            }
+            return ToPosixResult(pollRv);
+        }
+    } while (rv == PosixResultForErrno(EAGAIN));
+
+    return rv;
+}
+
+PosixResult RHXKL_Disconnect(int fd)
+{
+    sockaddr addr;
+    addr.sa_family = AF_UNSPEC;
 
     int rv;
-    while (CheckInterrupted(rv = static_cast<int>(recvmsg(socket, &msg, MSG_NOSIGNAL | MSG_ERRQUEUE))));
-    if (rv == -1)
-    {
-        return PAL_ZEROCOPY_AGAIN;
-    }
-
-    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
-    if (!cm)
-    {
-        return PAL_ZEROCOPY_AGAIN;
-    }
-
-	if (!((cm->cmsg_level == SOL_IP && cm->cmsg_type == IP_RECVERR) ||
-	      (cm->cmsg_level == SOL_IPV6 && cm->cmsg_type == IPV6_RECVERR)))
-    {
-        return PAL_ZEROCOPY_AGAIN;
-    }
-
-	struct sock_extended_err *serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cm));
-    if ((serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) ||
-        (serr->ee_errno != 0))
-    {
-        return PAL_ZEROCOPY_AGAIN;
-    }
-
-    int zerocopy = !(serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED);
-    if (zerocopy)
-    {
-        return PAL_ZEROCOPY_COPIED;
-    }
-    else
-    {
-        return PAL_ZEROCOPY_SUCCESS;
-    }
+    while (CheckInterrupted(rv = connect(fd, &addr, sizeof(sockaddr))));
+    return ToPosixResult(rv);
 }
