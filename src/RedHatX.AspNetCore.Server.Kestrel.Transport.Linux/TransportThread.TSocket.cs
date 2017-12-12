@@ -15,22 +15,32 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             None            = 0,
 
-            CloseEnd        = 0x02,
-            BothClosed      = 0x04,
+            AwaitReadable = 0x01,    // EPOLLIN
+            AwaitWritable = 0x04,    // EPOLLOUT
+            AwaitZeroCopy = 0x08,    // EPOLLERR
+            EventControlRegistered = 0x10, // EPOLLHUP
+            EventControlPending = 1 << 30, // EPOLLONESHOT
 
-            TypeAccept      = 0x10,
-            TypeClient      = 0x20,
-            TypePassFd      = 0x30,
-            TypeMask        = 0x30,
+            CloseEnd        = 0x20,
+            BothClosed      = 0x40,
 
-            DeferAccept     = 0x40
+            TypeAccept      = 0x100,
+            TypeClient      = 0x200,
+            TypePassFd      = 0x300,
+            TypeMask        = 0x300,
+
+            DeferAccept     = 0x400,
         }
 
         class TSocket : TransportConnection
         {
-            public TSocket(ThreadContext threadContext)
+            public const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
+            public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
+
+            public TSocket(ThreadContext threadContext, SocketFlags flags)
             {
                 ThreadContext = threadContext;
+                _flags = (int)flags;
             }
             private static readonly Action _stopSentinel = delegate { };
             private static readonly Action _completedSentinel = delegate { };
@@ -39,21 +49,26 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public SocketFlags Flags
             {
                 get { return (SocketFlags)_flags; }
-                set { _flags = (int)value; }
             }
 
-            public const EPollEvents EventControlRegistered = EPollEvents.HangUp;
-            public const EPollEvents EventControlPending = EPollEvents.OneShot;
-
-            public EPollEvents PendingEvents;
-            public readonly object EventLock = new object();
+            public SocketFlags Type => ((SocketFlags)_flags & SocketFlags.TypeMask);
 
             public int ZeroCopyThreshold;
 
+            public readonly object EventLock = new object();
+
+            // must be called under EventLock
+            public EPollEvents PendingEventState
+            {
+                get => (EPollEvents)_flags;
+                set => _flags = (int)value;
+            }
+
+            // must be called under EventLock
             public bool CloseEnd()
             {
-                int value = Interlocked.Add(ref _flags, (int)SocketFlags.CloseEnd);
-                return (value & (int)SocketFlags.BothClosed) != 0;
+                _flags = _flags + (int)SocketFlags.CloseEnd;
+                return (_flags & (int)SocketFlags.BothClosed) != 0;
             }
 
             public ThreadContext ThreadContext;
