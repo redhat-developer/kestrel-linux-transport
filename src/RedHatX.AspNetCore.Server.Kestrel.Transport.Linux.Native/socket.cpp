@@ -19,7 +19,10 @@
 #endif
 
 #ifndef SO_ZEROCOPY
-#define SO_ZEROCOPY	60
+#define SO_ZEROCOPY 60
+#endif
+#ifndef SO_EE_CODE_ZEROCOPY_COPIED
+#define SO_EE_CODE_ZEROCOPY_COPIED 1
 #endif
 
 struct PalSocketAddress
@@ -1135,7 +1138,7 @@ static const int ZeroCopySuccess = 1;
 PosixResult RHXKL_CompleteZeroCopy(int socket)
 {
     struct msghdr msg = {};
-	char control[100];
+    char control[100];
 
     do
     {

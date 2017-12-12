@@ -56,7 +56,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private readonly object _gate = new object();
         private int _cpuId;
         private State _state;
-        private Exception _failReason;
         private Thread _thread;
         private TaskCompletionSource<object> _stateChangeCompletion;
         private ThreadContext _threadContext;
@@ -278,16 +277,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     _state = State.Stopped;
                     return;
                 }
-                else if (_state == State.Stopped)
-                {
-                    if (_failReason != null)
-                    {
-                        var failReason = _failReason;
-                        _failReason = null;
-                        throw failReason;
-                    }
-                    return;
-                }
             }
 
             await UnbindAsync();
@@ -298,12 +287,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 if (_state == State.Stopped)
                 {
-                    if (_failReason != null)
-                    {
-                        var failReason = _failReason;
-                        _failReason = null;
-                        throw failReason;
-                    }
                     return;
                 }
                 else if (_state == State.Stopping)
@@ -500,7 +483,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                     }
 
-                    // handle accepts
+                    // zero copy
                     for (int i = 0; i < zeroCopyCompletions.Count; i++)
                     {
                         zeroCopyCompletions[i].CompleteZeroCopy();
@@ -1098,29 +1081,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             throw new InvalidOperationException($"nameof(TransportThread) is {_state}");
         }
 
-        private void CompleteStateChange(State state, Exception error = null)
+        private void CompleteStateChange(State state)
         {
             TaskCompletionSource<object> tcs;
             lock (_gate)
             {
                 tcs = _stateChangeCompletion;
-                if (tcs == null)
-                {
-                    _failReason = error;
-                }
                 _stateChangeCompletion = null;
                 _state = state;
             }
             ThreadPool.QueueUserWorkItem(o =>
             {
-                if (error == null)
-                {
-                    tcs?.SetResult(null);
-                }
-                else
-                {
-                    tcs?.SetException(error);
-                }
+                tcs?.SetResult(null);
             });
         }
 

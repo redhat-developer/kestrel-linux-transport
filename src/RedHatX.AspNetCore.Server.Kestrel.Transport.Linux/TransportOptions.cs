@@ -13,7 +13,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public bool DeferSend { get; set; } = true;
 
-        public int ZeroCopyThreshold { get; set; } = 8 * 1024; // 8KB
+        public int ZeroCopyThreshold { get; set; } = 10 * 1024; // 10KB
 
         public bool ZeroCopy { get; set; } = false;
 
