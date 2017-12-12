@@ -15,7 +15,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     sealed partial class TransportThread : ITransportActionHandler
     {
         private const int MSG_ZEROCOPY = 0x4000000;
-
         private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
         // 128 IOVectors, take up 2KB of stack, can send up to 512KB
         private const int MaxIOVectorSendLength = 128;
