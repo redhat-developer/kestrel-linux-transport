@@ -418,7 +418,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                 var type = tsocket.Type;
                                 if (type == SocketFlags.TypeClient)
                                 {
-                                    lock (tsocket.EventLock)
+                                    lock (tsocket.Gate)
                                     {
                                         var pendingEventState = tsocket.PendingEventState;
 
@@ -524,7 +524,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     for (int i = 0; i < reregisterEventSockets.Count; i++)
                     {
                         var tsocket = reregisterEventSockets[i];
-                        lock (tsocket.EventLock)
+                        lock (tsocket.Gate)
                         {
                             var pendingEventState = tsocket.PendingEventState & ~TSocket.EventControlPending;
                             tsocket.PendingEventState = pendingEventState;
@@ -796,7 +796,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             if (zerocopy)
             {
                 // If we have a pending Readable event, it will report on the zero-copy completion too.
-                lock (tsocket.EventLock)
+                lock (tsocket.Gate)
                 {
                     if ((tsocket.PendingEventState & EPollEvents.Readable) != EPollEvents.None)
                     {
@@ -810,7 +810,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             if (zerocopy && rv.Value <= 0 && zeroCopyRegistered)
             {
-                lock (tsocket.EventLock)
+                lock (tsocket.Gate)
                 {
                     tsocket.PendingEventState &= ~EPollEvents.Error;
                 }
@@ -834,7 +834,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void RegisterFor(TSocket tsocket, EPollEvents ev)
         {
-            lock (tsocket.EventLock)
+            lock (tsocket.Gate)
             {
                 var pendingEventState = tsocket.PendingEventState;
                 bool registered = (pendingEventState & TSocket.EventControlRegistered) != EPollEvents.None;
@@ -848,7 +848,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        // must be called under tsocket.EventLock
+        // must be called under tsocket.Gate
         private static void UpdateEPollControl(TSocket tsocket, EPollEvents flags, bool registered)
         {
             flags &= EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error;
@@ -1014,7 +1014,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             int fd;
             bool bothClosed = false;
             bool completeZeroCopy = false;
-            lock (tsocket.EventLock)
+            lock (tsocket.Gate)
             {
                 bothClosed = tsocket.CloseEnd();
                 if (!bothClosed)

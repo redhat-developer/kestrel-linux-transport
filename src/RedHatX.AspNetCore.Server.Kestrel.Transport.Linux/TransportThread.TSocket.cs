@@ -55,16 +55,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public int ZeroCopyThreshold;
 
-            public readonly object EventLock = new object();
+            public readonly object Gate = new object();
 
-            // must be called under EventLock
+            // must be called under Gate
             public EPollEvents PendingEventState
             {
                 get => (EPollEvents)_flags;
                 set => _flags = (int)value;
             }
 
-            // must be called under EventLock
+            // must be called under Gate
             public bool CloseEnd()
             {
                 _flags = _flags + (int)SocketFlags.CloseEnd;
