@@ -369,6 +369,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 int statWriteEvents = 0;
                 int statAcceptEvents = 0;
                 int statAccepts = 0;
+                int statZeroCopySuccess = 0;
+                int statZeroCopyCopied = 0;
                 var sockets = threadContext.Sockets;
 
                 var acceptableSockets = new List<TSocket>(1);
@@ -432,8 +434,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                                 if (copyResult == SocketInterop.ZeroCopyCopied)
                                                 {
                                                     tsocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                                                    statZeroCopyCopied++;
                                                 }
-                                                else if (copyResult != SocketInterop.ZeroCopySuccess)
+                                                else if (copyResult == SocketInterop.ZeroCopySuccess)
+                                                {
+                                                    statZeroCopySuccess++;
+                                                }
+                                                else
                                                 {
                                                     Environment.FailFast($"Error occurred while trying to complete zero copy: {copyResult}");
                                                 }
@@ -550,7 +557,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                 } while (running);
 
-                threadContext.Logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents}");
+                threadContext.Logger.LogInformation($"Thread {_threadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
             }
             catch (Exception ex)
             {
