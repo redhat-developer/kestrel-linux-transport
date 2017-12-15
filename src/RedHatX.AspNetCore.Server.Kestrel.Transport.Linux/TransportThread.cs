@@ -15,12 +15,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     sealed partial class TransportThread : ITransportActionHandler
     {
         private const int MSG_ZEROCOPY = 0x4000000;
-        private const int MaxPooledBlockLength = MemoryPool.MaxPooledBlockLength;
         // 128 IOVectors, take up 2KB of stack, can send up to 512KB
         private const int MaxIOVectorSendLength = 128;
         // 128 IOVectors, take up 2KB of stack, can receive up to 512KB
         private const int MaxIOVectorReceiveLength = 128;
-        private const int MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
         private const int ListenBacklog     = 128;
         private const int EventBufferLength = 512;
         private const int EPollBlocked      = 1;
@@ -28,6 +26,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private const byte PipeStopThread     = 0;
         private const byte PipeActionsPending = 1;
         private const byte PipeStopSockets    = 2;
+
+        private static readonly int MaxPooledBlockLength;
+        private static readonly int MaxSendLength;
+        static TransportThread()
+        {
+            using (var memoryPool = new MemoryPool())
+            {
+                MaxPooledBlockLength = memoryPool.MaxBufferSize;
+                MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
+            }
+        }
 
         private struct ScheduledAction
         {
@@ -1106,5 +1115,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         }
 
         private static long EPollData(int fd) => (((long)(uint)fd) << 32) | (long)(uint)fd;
+
+        internal static MemoryPool CreateMemoryPool()
+        {
+            return new MemoryPool();
+        }
     }
 }

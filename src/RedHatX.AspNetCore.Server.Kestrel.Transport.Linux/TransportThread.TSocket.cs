@@ -151,7 +151,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public bool IsZeroCopyFinished() => !ReferenceEquals(_zeroCopyWrittenCompletion, _stopSentinel);
 
-            public override BufferPool BufferPool => ThreadContext.BufferPool;
+            public override MemoryPool MemoryPool => ThreadContext.MemoryPool;
 
             public override IScheduler InputWriterScheduler => InlineScheduler.Default;
 

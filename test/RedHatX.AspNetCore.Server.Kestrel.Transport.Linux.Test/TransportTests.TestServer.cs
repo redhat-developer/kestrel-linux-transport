@@ -95,9 +95,9 @@ namespace Tests
         public void OnConnection(IFeatureCollection features)
         {
             var transportFeature = features.Get<IConnectionTransportFeature>();
-            var bufferPool = transportFeature.BufferPool;
-            var input = new Pipe(GetInputPipeOptions(bufferPool, transportFeature.InputWriterScheduler));
-            var output = new Pipe(GetOutputPipeOptions(bufferPool, transportFeature.OutputReaderScheduler));
+            var memoryPool = transportFeature.MemoryPool;
+            var input = new Pipe(GetInputPipeOptions(memoryPool, transportFeature.InputWriterScheduler));
+            var output = new Pipe(GetOutputPipeOptions(memoryPool, transportFeature.OutputReaderScheduler));
 
             _connectionHandler(input.Reader, output.Writer);
 
@@ -109,18 +109,18 @@ namespace Tests
         private const long _maxRequestBufferSize = 1024 * 1024;
         private const long _maxResponseBufferSize = 64 * 1024;
 
-        private PipeOptions GetInputPipeOptions(BufferPool bufferPool, IScheduler writerScheduler) => new PipeOptions
+        private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, IScheduler writerScheduler) => new PipeOptions
         (
-            bufferPool: bufferPool,
+            bufferPool: memoryPool,
             readerScheduler: InlineScheduler.Default,
             writerScheduler: writerScheduler,
             maximumSizeHigh: _maxRequestBufferSize,
             maximumSizeLow: _maxRequestBufferSize
         );
 
-        private PipeOptions GetOutputPipeOptions(BufferPool bufferPool, IScheduler readerScheduler) => new PipeOptions
+        private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, IScheduler readerScheduler) => new PipeOptions
         (
-            bufferPool: bufferPool,
+            bufferPool: memoryPool,
             readerScheduler: readerScheduler,
             writerScheduler: InlineScheduler.Default,
             maximumSizeHigh: _maxResponseBufferSize,
