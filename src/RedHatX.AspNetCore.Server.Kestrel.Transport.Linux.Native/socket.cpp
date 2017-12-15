@@ -1092,7 +1092,6 @@ PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket
 
     return ToPosixResult(rv);
 }
-#pragma clang diagnostic pop
 
 PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2)
 {
@@ -1189,6 +1188,7 @@ PosixResult RHXKL_CompleteZeroCopy(int socket)
         }
     } while (true);
 }
+#pragma clang diagnostic pop
 
 PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout)
 {
@@ -1231,4 +1231,3 @@ PosixResult RHXKL_Disconnect(int fd)
     while (CheckInterrupted(rv = connect(fd, &addr, sizeof(sockaddr))));
     return ToPosixResult(rv);
 }
-
