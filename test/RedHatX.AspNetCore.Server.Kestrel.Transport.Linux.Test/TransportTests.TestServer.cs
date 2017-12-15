@@ -111,7 +111,7 @@ namespace Tests
 
         private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, IScheduler writerScheduler) => new PipeOptions
         (
-            bufferPool: memoryPool,
+            pool: memoryPool,
             readerScheduler: InlineScheduler.Default,
             writerScheduler: writerScheduler,
             maximumSizeHigh: _maxRequestBufferSize,
@@ -120,7 +120,7 @@ namespace Tests
 
         private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, IScheduler readerScheduler) => new PipeOptions
         (
-            bufferPool: memoryPool,
+            pool: memoryPool,
             readerScheduler: readerScheduler,
             writerScheduler: InlineScheduler.Default,
             maximumSizeHigh: _maxResponseBufferSize,
