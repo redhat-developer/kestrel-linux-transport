@@ -1231,3 +1231,4 @@ PosixResult RHXKL_Disconnect(int fd)
     while (CheckInterrupted(rv = connect(fd, &addr, sizeof(sockaddr))));
     return ToPosixResult(rv);
 }
+
