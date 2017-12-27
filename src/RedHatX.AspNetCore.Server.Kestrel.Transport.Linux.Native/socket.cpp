@@ -10,9 +10,22 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <linux/errqueue.h>
+#include <linux/if_packet.h>
+#include <poll.h>
 
 #ifndef SO_INCOMING_CPU
 #define SO_INCOMING_CPU 49
+#endif
+
+#ifndef SO_ZEROCOPY
+#define SO_ZEROCOPY 60
+#endif
+#ifndef SO_EE_CODE_ZEROCOPY_COPIED
+#define SO_EE_CODE_ZEROCOPY_COPIED 1
+#endif
+#ifndef SO_EE_ORIGIN_ZEROCOPY
+#define SO_EE_ORIGIN_ZEROCOPY 5
 #endif
 
 struct PalSocketAddress
@@ -51,7 +64,7 @@ extern "C"
     PosixResult RHXKL_Listen(intptr_t socket, int backlog);
     PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, intptr_t* acceptedSocket);
     PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown);
-    PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen);
+    PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen, int flags);
     PosixResult RHXKL_Receive(int socket, IOVector* ioVectors, int ioVectorLen);
     PosixResult RHXKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
     PosixResult RHXKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen);
@@ -61,6 +74,9 @@ extern "C"
     PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking);
     PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket);
     PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
+    PosixResult RHXKL_CompleteZeroCopy(int socket);
+    PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout);
+    PosixResult RHXKL_Disconnect(int fd);
 }
 
 struct IPSocketAddress
@@ -179,6 +195,7 @@ enum SocketOptionName : int32_t
     // corefx controls this together with PAL_SO_REUSEADDR
     PAL_SO_REUSEPORT = 0x2001,
     PAL_SO_INCOMING_CPU = 0x2002,
+    PAL_SO_ZEROCOPY = 0x2003,
     
     // PAL_SO_MAXCONN = 0x7fffffff,
 
@@ -438,6 +455,10 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionName, int32_t socketO
 
                 case PAL_SO_INCOMING_CPU:
                     optName = SO_INCOMING_CPU;
+                    return true;
+
+                case PAL_SO_ZEROCOPY:
+                    optName = SO_ZEROCOPY;
                     return true;
 
                 default:
@@ -820,7 +841,7 @@ PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown)
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen)
+PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen, int flags)
 {
     if (ioVectors == nullptr || ioVectorLen <= 0)
     {
@@ -839,7 +860,7 @@ PosixResult RHXKL_Send(int fd, IOVector* ioVectors, int ioVectorLen)
         .msg_controllen = 0,
         .msg_flags = 0
     };
-    int flags = MSG_NOSIGNAL;
+    flags |= MSG_NOSIGNAL;
 
     int rv;
     while (CheckInterrupted(rv = static_cast<int>(sendmsg(fd, &header, flags))));
@@ -964,6 +985,9 @@ PosixResult RHXKL_Duplicate(intptr_t socket, intptr_t* dup)
     return ToPosixResult(rv);
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-pragmas" // Fix next ignore being unknown
+#pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant" // expanded from macro 'CMSG_FIRSTHDR'
 PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking)
 {
     if (receiveHandle == nullptr)
@@ -998,7 +1022,7 @@ PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_
 
     if (rv != -1)
     {
-        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != NULL; cmsg = CMSG_NXTHDR(&header,cmsg))
+        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != nullptr; cmsg = CMSG_NXTHDR(&header,cmsg))
         {
             if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
             {
@@ -1112,4 +1136,98 @@ PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t 
     }
 
     return ToPosixResult(rv);   
+}
+
+static const int ZeroCopyCopied = 0;
+static const int ZeroCopySuccess = 1;
+
+PosixResult RHXKL_CompleteZeroCopy(int socket)
+{
+    struct msghdr msg = {};
+    char control[100];
+
+    do
+    {
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+
+        int rv;
+        while (CheckInterrupted(rv = static_cast<int>(recvmsg(socket, &msg, MSG_NOSIGNAL | MSG_ERRQUEUE))));
+        if (rv == -1)
+        {
+            return ToPosixResult(rv);
+        }
+
+        struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+        if (!cm)
+        {
+            continue;
+        }
+
+        if (!((cm->cmsg_level == SOL_IP && cm->cmsg_type == IP_RECVERR) ||
+              (cm->cmsg_level == SOL_IPV6 && cm->cmsg_type == IPV6_RECVERR)))
+        {
+            continue;
+        }
+
+        struct sock_extended_err *serr = reinterpret_cast<struct sock_extended_err*>(CMSG_DATA(cm));
+        if ((serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) ||
+            (serr->ee_errno != 0))
+        {
+            continue;
+        }
+
+        int zerocopy = !(serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED);
+        if (zerocopy)
+        {
+            return ToPosixResult(ZeroCopySuccess);
+        }
+        else
+        {
+            return ToPosixResult(ZeroCopyCopied);
+        }
+    } while (true);
+}
+#pragma clang diagnostic pop
+
+PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout)
+{
+    struct pollfd fds =
+    {
+        .fd = socket,
+        .events = 0,
+        .revents = 0
+    };
+
+    PosixResult rv;
+    do
+    {
+        int pollRv;
+        while (CheckInterrupted(pollRv = static_cast<int>(poll(&fds, 1, timeout))));
+        if (poll(&fds, 1, -1) == 1)
+        {
+            rv = RHXKL_CompleteZeroCopy(socket);
+        }
+        else
+        {
+            if (pollRv == 0)
+            {
+                pollRv = -1;
+                errno = ETIME;
+            }
+            return ToPosixResult(pollRv);
+        }
+    } while (rv == PosixResultForErrno(EAGAIN));
+
+    return rv;
+}
+
+PosixResult RHXKL_Disconnect(int fd)
+{
+    sockaddr addr;
+    addr.sa_family = AF_UNSPEC;
+
+    int rv;
+    while (CheckInterrupted(rv = connect(fd, &addr, sizeof(sockaddr))));
+    return ToPosixResult(rv);
 }

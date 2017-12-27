@@ -15,57 +15,66 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             None            = 0,
 
-            EPollRegistered = 0x01,
+            AwaitReadable = 0x01,    // EPOLLIN
+            AwaitWritable = 0x04,    // EPOLLOUT
+            AwaitZeroCopy = 0x08,    // EPOLLERR
+            EventControlRegistered = 0x10, // EPOLLHUP
+            EventControlPending = 1 << 30, // EPOLLONESHOT
 
-            CloseEnd        = 0x02,
-            BothClosed      = 0x04,
+            CloseEnd        = 0x20,
+            BothClosed      = 0x40,
 
-            TypeAccept      = 0x10,
-            TypeClient      = 0x20,
-            TypePassFd      = 0x30,
-            TypeMask        = 0x30,
+            TypeAccept      = 0x100,
+            TypeClient      = 0x200,
+            TypePassFd      = 0x300,
+            TypeMask        = 0x300,
 
-            DeferAccept     = 0x40
+            DeferAccept     = 0x400,
         }
 
         class TSocket : TransportConnection
         {
-            public TSocket(ThreadContext threadContext)
+            public const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
+            public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
+
+            public TSocket(ThreadContext threadContext, SocketFlags flags)
             {
                 ThreadContext = threadContext;
+                _flags = (int)flags;
             }
             private static readonly Action _stopSentinel = delegate { };
+            private static readonly Action _completedSentinel = delegate { };
 
             private int _flags;
             public SocketFlags Flags
             {
                 get { return (SocketFlags)_flags; }
-                set { _flags = (int)value; }
             }
 
-            public bool SetRegistered()
+            public SocketFlags Type => ((SocketFlags)_flags & SocketFlags.TypeMask);
+
+            public int ZeroCopyThreshold;
+
+            public readonly object Gate = new object();
+
+            // must be called under Gate
+            public EPollEvents PendingEventState
             {
-                if ((_flags & (int)SocketFlags.EPollRegistered) != 0)
-                {
-                    return false;
-                }
-                else
-                {
-                    Interlocked.Add(ref _flags, (int)SocketFlags.EPollRegistered);
-                    return true;
-                }
+                get => (EPollEvents)_flags;
+                set => _flags = (int)value;
             }
 
+            // must be called under Gate
             public bool CloseEnd()
             {
-                int value = Interlocked.Add(ref _flags, (int)SocketFlags.CloseEnd);
-                return (value & (int)SocketFlags.BothClosed) != 0;
+                _flags = _flags + (int)SocketFlags.CloseEnd;
+                return (_flags & (int)SocketFlags.BothClosed) != 0;
             }
 
             public ThreadContext ThreadContext;
             public int         Fd;
             public Socket      Socket;
-            public Socket      DupSocket;
+            public Exception   OutputError;
 
             private Action _writableCompletion;
             public bool SetWritableContinuation(Action continuation)
@@ -87,6 +96,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Output.CancelPendingRead();
                 // unblock Writable (may race with CompleteWritable)
                 Action continuation = Interlocked.Exchange(ref _writableCompletion, _stopSentinel);
+                continuation?.Invoke();
+                // unblock ZeroCopyWritten (may race with CompleteZeroCopy)
+                continuation = Interlocked.Exchange(ref _zeroCopyWrittenCompletion, _stopSentinel);
                 continuation?.Invoke();
             }
 
@@ -113,7 +125,33 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 continuation?.Invoke();
             }
 
-            public override BufferPool BufferPool => ThreadContext.BufferPool;
+            private Action _zeroCopyWrittenCompletion;
+            public bool SetZeroCopyWrittenContinuation(Action continuation)
+            {
+                var oldValue = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, continuation, null);
+                bool completedOrCancelled = oldValue != null;
+                if (completedOrCancelled)
+                {
+                    Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, null, _completedSentinel);
+                    continuation();
+                }
+                return !completedOrCancelled;
+            }
+
+            public void CompleteZeroCopy()
+            {
+                Action continuation = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, _completedSentinel, null);
+                bool completedOrCancelled = continuation != null;
+                if (completedOrCancelled)
+                {
+                    Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, null, continuation);
+                    continuation();
+                }
+            }
+
+            public bool IsZeroCopyFinished() => !ReferenceEquals(_zeroCopyWrittenCompletion, _stopSentinel);
+
+            public override MemoryPool MemoryPool => ThreadContext.MemoryPool;
 
             public override IScheduler InputWriterScheduler => InlineScheduler.Default;
 
@@ -176,6 +214,37 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 else
                 {
                     continuation();
+                }
+            }
+        }
+
+        struct ZeroCopyWrittenAwaitable: ICriticalNotifyCompletion
+        {
+            private readonly TSocket _tsocket;
+            private readonly bool _registered;
+
+            public ZeroCopyWrittenAwaitable(TSocket awaiter, bool registered)
+            {
+                _tsocket = awaiter;
+                _registered = registered;
+            }
+
+            public bool IsCompleted => false;
+
+            public bool GetResult() => _tsocket.IsZeroCopyFinished();
+
+            public ZeroCopyWrittenAwaitable GetAwaiter() => this;
+
+            public void UnsafeOnCompleted(Action continuation) => OnCompleted(continuation);
+
+            public void OnCompleted(Action continuation)
+            {
+                if (_tsocket.SetZeroCopyWrittenContinuation(continuation))
+                {
+                    if (!_registered)
+                    {
+                        TransportThread.RegisterForZeroCopyWritten(_tsocket);
+                    }
                 }
             }
         }

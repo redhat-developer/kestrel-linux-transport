@@ -33,7 +33,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // These members need to be Disposed
                 EPoll = EPoll.Create();
                 EPollFd = EPoll.DangerousGetHandle().ToInt32();
-                BufferPool = new MemoryPool();
+                MemoryPool = TransportThread.CreateMemoryPool();
                 PipeEnds = PipeEnd.CreatePair(blocking: false);
             }
 
@@ -46,7 +46,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly TransportThread TransportThread;
             // key is the file descriptor
             public readonly Dictionary<int, TSocket> Sockets;
-            public BufferPool BufferPool;
+            public MemoryPool MemoryPool;
             public readonly List<TSocket> AcceptSockets;
 
             private EPoll EPoll;
@@ -138,7 +138,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 EPoll?.Dispose();
                 PipeEnds.Dispose();
-                BufferPool?.Dispose();
+                MemoryPool?.Dispose();
             }
 
             public void RemoveSocket(int tsocketKey)
