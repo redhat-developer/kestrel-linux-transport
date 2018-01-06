@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.IO;
 using System.IO.Pipelines;
 using System.Text;
@@ -400,7 +401,7 @@ namespace Tests
             }
         }
 
-        private static unsafe void AssertCounter(ref ReadableBuffer buffer, ref int bytesReceived, ref int remainderRef)
+        private static unsafe void AssertCounter(ref ReadOnlyBuffer buffer, ref int bytesReceived, ref int remainderRef)
         {
             int remainder = remainderRef;
             int currentValue = bytesReceived / 4;

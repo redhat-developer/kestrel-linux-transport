@@ -153,9 +153,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public override MemoryPool MemoryPool => ThreadContext.MemoryPool;
 
-            public override IScheduler InputWriterScheduler => InlineScheduler.Default;
+            public override Scheduler InputWriterScheduler => Scheduler.Inline;
 
-            public override IScheduler OutputReaderScheduler => ThreadContext.SendScheduler;
+            public override Scheduler OutputReaderScheduler => ThreadContext.SendScheduler;
         }
 
         struct ReadableAwaitable: ICriticalNotifyCompletion

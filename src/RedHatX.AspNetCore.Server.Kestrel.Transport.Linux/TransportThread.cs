@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Sequences;
 using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
@@ -335,7 +336,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // the runtime may start.
                 if (_cpuId != -1)
                 {
-                    Scheduler.SetCurrentThreadAffinity(_cpuId);
+                    SystemScheduler.SetCurrentThreadAffinity(_cpuId);
                 }
                 // objects are allocated on the PollThread heap
                 int pipeKey;
@@ -692,8 +693,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 while (true)
                 {
                     var readResult = await tsocket.Output.ReadAsync();
-                    ReadableBuffer buffer = readResult.Buffer;
-                    ReadCursor end = buffer.Start;
+                    ReadOnlyBuffer buffer = readResult.Buffer;
+                    Position end = buffer.Start;
                     try
                     {
                         if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
@@ -756,7 +757,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadableBuffer buffer)
+        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadOnlyBuffer buffer)
         {
             bool zeroCopyRegistered = false;
             int fd = tsocket.Fd;
