@@ -12,7 +12,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     sealed partial class TransportThread
     {
-        sealed class ThreadContext : IScheduler
+        sealed class ThreadContext : Scheduler
         {
             public ThreadContext(TransportThread transportThread, LinuxTransportOptions transportOptions, IConnectionHandler connectionHandler, ILogger logger)
             {
@@ -25,7 +25,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _schedulerAdding = new Queue<ScheduledAction>(1024);
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
                 _epollState = EPollBlocked;
-                SendScheduler = transportOptions.DeferSend ? this as IScheduler : InlineScheduler.Default;
+                SendScheduler = transportOptions.DeferSend ? this as Scheduler : Scheduler.Inline;
             }
 
             public void Initialize()
@@ -41,7 +41,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly ILogger Logger;
             public readonly IConnectionHandler ConnectionHandler;
             public PipeEndPair PipeEnds;
-            public readonly IScheduler SendScheduler;
+            public readonly Scheduler SendScheduler;
 
             public readonly TransportThread TransportThread;
             // key is the file descriptor
@@ -60,7 +60,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Volatile.Write(ref _epollState, EPollNotBlocked);
             }
 
-            void IScheduler.Schedule(Action<object> action, object state)
+            public override void Schedule(Action action)
+            {
+                Schedule(state => ((Action)state)(), action);
+            }
+
+            public override void Schedule(Action<object> action, object state)
             {
                 int epollState;
                 lock (_schedulerGate)
@@ -115,7 +120,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void CloseAccept()
             {
-                (this as IScheduler).Schedule(_ =>
+                (this as Scheduler).Schedule(_ =>
                 {
                     this.TransportThread.CloseAccept(this, Sockets);
                 }, null);

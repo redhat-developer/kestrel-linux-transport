@@ -109,20 +109,20 @@ namespace Tests
         private const long _maxRequestBufferSize = 1024 * 1024;
         private const long _maxResponseBufferSize = 64 * 1024;
 
-        private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, IScheduler writerScheduler) => new PipeOptions
+        private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, Scheduler writerScheduler) => new PipeOptions
         (
             pool: memoryPool,
-            readerScheduler: InlineScheduler.Default,
+            readerScheduler: Scheduler.Inline,
             writerScheduler: writerScheduler,
             maximumSizeHigh: _maxRequestBufferSize,
             maximumSizeLow: _maxRequestBufferSize
         );
 
-        private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, IScheduler readerScheduler) => new PipeOptions
+        private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, Scheduler readerScheduler) => new PipeOptions
         (
             pool: memoryPool,
             readerScheduler: readerScheduler,
-            writerScheduler: InlineScheduler.Default,
+            writerScheduler: Scheduler.Inline,
             maximumSizeHigh: _maxResponseBufferSize,
             maximumSizeLow: _maxResponseBufferSize
         );
@@ -148,7 +148,10 @@ namespace Tests
                     }
 
                     var response = output.Alloc();
-                    response.Append(request);
+                    foreach (var memory in request)
+                    {
+                        response.Write(memory.Span);
+                    }
                     await response.FlushAsync();
                     input.Advance(request.End);
                 }

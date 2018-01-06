@@ -14,7 +14,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public extern static PosixResult GetAvailableCpusForProcess();
     }
 
-    class Scheduler
+    class SystemScheduler
     {
         public static PosixResult TrySetCurrentThreadAffinity(int cpuId)
         {

@@ -21,7 +21,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public int ThreadCount
         {
-            get => _threadCount ?? (CpuSet.IsEmpty ? Scheduler.GetAvailableCpusForProcess() : CpuSet.Cpus.Length);
+            get => _threadCount ?? (CpuSet.IsEmpty ? SystemScheduler.GetAvailableCpusForProcess() : CpuSet.Cpus.Length);
             set => _threadCount = value;
         }
 
