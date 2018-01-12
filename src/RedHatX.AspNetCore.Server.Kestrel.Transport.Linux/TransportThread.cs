@@ -722,6 +722,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                     break;
                                 }
                             }
+                            else if (zerocopy && result == PosixResult.ENOBUFS)
+                            {
+                                // We reached the max locked memory (ulimit -l), disable zerocopy.
+                                tsocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                            }
                             else
                             {
                                 tsocket.OutputError = result.AsException();
