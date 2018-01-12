@@ -78,8 +78,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             if (!IsSuccess)
             {
-                throw AsException();
+                ThrowException();
             }
+        }
+
+        private void ThrowException()
+        {
+            throw AsException();
         }
 
         public static implicit operator bool(PosixResult result)
