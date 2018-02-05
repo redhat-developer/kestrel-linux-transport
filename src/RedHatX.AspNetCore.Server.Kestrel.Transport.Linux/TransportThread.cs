@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Sequences;
@@ -693,8 +694,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 while (true)
                 {
                     var readResult = await tsocket.Output.ReadAsync();
-                    ReadOnlyBuffer buffer = readResult.Buffer;
-                    Position end = buffer.Start;
+                    ReadOnlyBuffer<byte> buffer = readResult.Buffer;
+                    SequencePosition end = buffer.Start;
                     try
                     {
                         if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
@@ -712,7 +713,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             }
                             else if (result.IsSuccess)
                             {
-                                end = buffer.Move(buffer.Start, result.Value);
+                                end = buffer.GetPosition(buffer.Start, result.Value);
                             }
                             else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                             {
@@ -746,7 +747,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     finally
                     {
                         // We need to call Advance to end the read
-                        tsocket.Output.Advance(end);
+                        tsocket.Output.AdvanceTo(end);
                     }
                 }
             }
@@ -762,7 +763,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadOnlyBuffer buffer)
+        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadOnlyBuffer<byte> buffer)
         {
             bool zeroCopyRegistered = false;
             int fd = tsocket.Fd;
@@ -891,16 +892,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 while (availableBytes != 0)
                 {
-                    var buffer = tsocket.Input.Alloc(2048);
                     try
                     {
-                        error = Receive(tsocket.Fd, availableBytes, ref buffer);
+                        error = Receive(tsocket.Fd, availableBytes, tsocket.Input);
                         if (error != null)
                         {
                             break;
                         }
                         availableBytes = 0;
-                        var flushResult = await buffer.FlushAsync();
+                        var flushResult = await tsocket.Input.FlushAsync();
                         bool readable = true;
                         if (!flushResult.IsCompleted // Reader hasn't stopped
                          && !flushResult.IsCancelled // TransportThread hasn't stopped
@@ -916,7 +916,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     catch (Exception e)
                     {
                         availableBytes = 0;
-                        buffer.Commit();
+                        tsocket.Input.Commit();
                         error = e;
                     }
                 }
@@ -936,10 +936,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe Exception Receive(int fd, int availableBytes, ref WritableBuffer wb)
+        private static unsafe Exception Receive(int fd, int availableBytes, PipeWriter writer)
         {
-            int ioVectorLength = availableBytes <= wb.Buffer.Length ? 1 :
-                    Math.Min(1 + (availableBytes - wb.Buffer.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
+            Memory<byte> memory = writer.GetMemory(2048);
+
+            int ioVectorLength = availableBytes <= memory.Length ? 1 :
+                    Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
             var ioVectors = stackalloc IOVector[ioVectorLength];
             var allocated = 0;
 
@@ -947,8 +949,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             int ioVectorsUsed = 0;
             for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
             {
-                wb.Ensure(1);
-                var memory = wb.Buffer;
                 var length = memory.Length;
                 var bufferHandle = memory.Retain(pin: true);
                 ioVectors[ioVectorsUsed].Base = bufferHandle.Pointer;
@@ -965,8 +965,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     break;
                 }
 
-                wb.Advance(length);
+                writer.Advance(length);
                 advanced += length;
+                memory = writer.GetMemory(1);
             }
             var expectedMin = Math.Min(availableBytes, allocated);
 
@@ -989,7 +990,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     if (received >= expectedMin)
                     {
                         // We made it!
-                        wb.Advance(received - advanced);
+                        writer.Advance(received - advanced);
                         return null;
                     }
                     eAgainCount = 0;

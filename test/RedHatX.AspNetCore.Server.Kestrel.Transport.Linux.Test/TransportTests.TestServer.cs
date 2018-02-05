@@ -13,7 +13,7 @@ using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 
 namespace Tests
 {
-    public delegate void TestServerConnectionHandler(IPipeReader input, IPipeWriter output);
+    public delegate void TestServerConnectionHandler(PipeReader input, PipeWriter output);
 
     class TestServerOptions
     {
@@ -109,22 +109,22 @@ namespace Tests
         private const long _maxRequestBufferSize = 1024 * 1024;
         private const long _maxResponseBufferSize = 64 * 1024;
 
-        private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, Scheduler writerScheduler) => new PipeOptions
+        private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, PipeScheduler writerScheduler) => new PipeOptions
         (
             pool: memoryPool,
-            readerScheduler: Scheduler.Inline,
+            readerScheduler: PipeScheduler.Inline,
             writerScheduler: writerScheduler,
-            maximumSizeHigh: _maxRequestBufferSize,
-            maximumSizeLow: _maxRequestBufferSize
+            pauseWriterThreshold: _maxRequestBufferSize,
+            resumeWriterThreshold: _maxRequestBufferSize
         );
 
-        private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, Scheduler readerScheduler) => new PipeOptions
+        private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, PipeScheduler readerScheduler) => new PipeOptions
         (
             pool: memoryPool,
             readerScheduler: readerScheduler,
-            writerScheduler: Scheduler.Inline,
-            maximumSizeHigh: _maxResponseBufferSize,
-            maximumSizeLow: _maxResponseBufferSize
+            writerScheduler: PipeScheduler.Inline,
+            pauseWriterThreshold: _maxResponseBufferSize,
+            resumeWriterThreshold: _maxResponseBufferSize
         );
 
         public void Dispose()
@@ -132,7 +132,7 @@ namespace Tests
             _transport.Dispose(); 
         }
 
-        public static async void Echo(IPipeReader input, IPipeWriter output)
+        public static async void Echo(PipeReader input, PipeWriter output)
         {
             try
             {
@@ -143,17 +143,16 @@ namespace Tests
 
                     if (request.IsEmpty && result.IsCompleted)
                     {
-                        input.Advance(request.End);
+                        input.AdvanceTo(request.End);
                         break;
                     }
 
-                    var response = output.Alloc();
                     foreach (var memory in request)
                     {
-                        response.Write(memory.Span);
+                        output.Write(memory.Span);
                     }
-                    await response.FlushAsync();
-                    input.Advance(request.End);
+                    await output.FlushAsync();
+                    input.AdvanceTo(request.End);
                 }
             }
             catch

@@ -12,7 +12,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     sealed partial class TransportThread
     {
-        sealed class ThreadContext : Scheduler
+        sealed class ThreadContext : PipeScheduler
         {
             public ThreadContext(TransportThread transportThread, LinuxTransportOptions transportOptions, IConnectionHandler connectionHandler, ILogger logger)
             {
@@ -25,7 +25,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _schedulerAdding = new Queue<ScheduledAction>(1024);
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
                 _epollState = EPollBlocked;
-                SendScheduler = transportOptions.DeferSend ? this as Scheduler : Scheduler.Inline;
+                SendScheduler = transportOptions.DeferSend ? this as PipeScheduler : PipeScheduler.Inline;
             }
 
             public void Initialize()
@@ -41,7 +41,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly ILogger Logger;
             public readonly IConnectionHandler ConnectionHandler;
             public PipeEndPair PipeEnds;
-            public readonly Scheduler SendScheduler;
+            public readonly PipeScheduler SendScheduler;
 
             public readonly TransportThread TransportThread;
             // key is the file descriptor
@@ -120,7 +120,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void CloseAccept()
             {
-                (this as Scheduler).Schedule(_ =>
+                (this as PipeScheduler).Schedule(_ =>
                 {
                     this.TransportThread.CloseAccept(this, Sockets);
                 }, null);

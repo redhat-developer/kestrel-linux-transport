@@ -106,14 +106,14 @@ namespace Tests
 
                 do
                 {
-                    var buffer = output.Alloc(bufferSize);
-                    buffer.Advance(bufferSize);
+                    var memory = output.GetMemory(bufferSize);
+                    output.Advance(bufferSize);
                     bytesWritten += bufferSize;
 
                     // If it takes 1 second to write, assume the socket
                     // is no longer writable
                     writeTimeout.Change(1000, Timeout.Infinite);
-                    await buffer.FlushAsync();
+                    await output.FlushAsync();
                     // cancel the timeout
                     writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
 
@@ -161,13 +161,13 @@ namespace Tests
                 bool flushCompleted;
                 do
                 {
-                    var buffer = output.Alloc(bufferSize);
-                    buffer.Advance(bufferSize);
+                    var memory = output.GetMemory(bufferSize);
+                    output.Advance(bufferSize);
 
                     // If it takes 1 second to write, assume the socket
                     // is no longer writable
                     writeTimeout.Change(1000, Timeout.Infinite);
-                    var flushResult = await buffer.FlushAsync();
+                    var flushResult = await output.FlushAsync();
                     flushCompleted = flushResult.IsCompleted;
                     // cancel the timeout
                     writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
@@ -238,11 +238,11 @@ namespace Tests
                     var buffer = readResult.Buffer;
                     if (buffer.IsEmpty && readResult.IsCompleted)
                     {
-                        input.Advance(buffer.End);
+                        input.AdvanceTo(buffer.End);
                         break;
                     }
                     AssertCounter(ref buffer, ref bytesReceived, ref remainder);
-                    input.Advance(buffer.End);
+                    input.AdvanceTo(buffer.End);
                 }
                 Assert.Equal(receiveLength, bytesReceived);
                 output.Complete();
@@ -278,9 +278,8 @@ namespace Tests
             const int sendLength = 1000000;
             TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
-                var buffer = output.Alloc(0);
-                FillBuffer(ref buffer, sendLength / 4);
-                await buffer.FlushAsync();
+                FillBuffer(output, sendLength / 4);
+                await output.FlushAsync();
                 output.Complete();
                 input.Complete();
             };
@@ -321,9 +320,8 @@ namespace Tests
                 int threadId = Thread.CurrentThread.ManagedThreadId;
                 var data = Encoding.UTF8.GetBytes(threadId.ToString());
 
-                var buffer = output.Alloc(data.Length);
-                buffer.Write(data);;
-                await buffer.FlushAsync();
+                output.Write(data);
+                await output.FlushAsync();
 
                 output.Complete();
                 input.Complete();
@@ -362,16 +360,16 @@ namespace Tests
             }
         }
 
-        private unsafe static void FillBuffer(ref WritableBuffer wb, int count)
+        private unsafe static void FillBuffer(PipeWriter writer, int count)
         {
             for (int i = 0; i < count; i++)
             {
-                wb.Ensure(4);
-                var bufferHandle = wb.Buffer.Retain(pin: true);
+                var memory = writer.GetMemory(4);
+                var bufferHandle = memory.Retain(pin: true);
                 void* pointer = bufferHandle.Pointer;
                 *(int*)pointer = i;
                 bufferHandle.Dispose();
-                wb.Advance(4);
+                writer.Advance(4);
             }
         }
 
@@ -401,7 +399,7 @@ namespace Tests
             }
         }
 
-        private static unsafe void AssertCounter(ref ReadOnlyBuffer buffer, ref int bytesReceived, ref int remainderRef)
+        private static unsafe void AssertCounter(ref ReadOnlyBuffer<byte> buffer, ref int bytesReceived, ref int remainderRef)
         {
             int remainder = remainderRef;
             int currentValue = bytesReceived / 4;
