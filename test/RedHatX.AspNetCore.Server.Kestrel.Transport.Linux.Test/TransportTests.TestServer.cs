@@ -101,8 +101,8 @@ namespace Tests
 
             _connectionHandler(input.Reader, output.Writer);
 
-            transportFeature.Transport = new PipeConnection(input.Reader, output.Writer);
-            transportFeature.Application = new PipeConnection(output.Reader, input.Writer);
+            transportFeature.Transport = new DuplexPipe(input.Reader, output.Writer);
+            transportFeature.Application = new DuplexPipe(output.Reader, input.Writer);
         }
 
         // copied from Kestrel
