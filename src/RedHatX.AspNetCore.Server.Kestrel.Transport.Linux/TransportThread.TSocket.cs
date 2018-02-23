@@ -80,7 +80,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public bool SetWritableContinuation(Action continuation)
             {
                 var oldValue = Interlocked.CompareExchange(ref _writableCompletion, continuation, null);
-                return oldValue == null;
+                return ReferenceEquals(oldValue, null);
             }
 
             public bool IsWritable() => !ReferenceEquals(_writableCompletion, _stopSentinel);
@@ -106,7 +106,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public bool SetReadableContinuation(Action continuation)
             {
                 var oldValue = Interlocked.CompareExchange(ref _readableCompletion, continuation, null);
-                return oldValue == null;
+                return ReferenceEquals(oldValue, null);
             }
 
             public bool IsReadable() => !ReferenceEquals(_readableCompletion, _stopSentinel);
@@ -129,7 +129,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public bool SetZeroCopyWrittenContinuation(Action continuation)
             {
                 var oldValue = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, continuation, null);
-                bool completedOrCancelled = oldValue != null;
+                bool completedOrCancelled = !ReferenceEquals(oldValue, null);
                 if (completedOrCancelled)
                 {
                     Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, null, _completedSentinel);
@@ -141,7 +141,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public void CompleteZeroCopy()
             {
                 Action continuation = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, _completedSentinel, null);
-                bool completedOrCancelled = continuation != null;
+                bool completedOrCancelled = !ReferenceEquals(continuation, null);
                 if (completedOrCancelled)
                 {
                     Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, null, continuation);
