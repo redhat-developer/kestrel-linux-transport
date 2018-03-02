@@ -75,7 +75,6 @@ extern "C"
     PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket);
     PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
     PosixResult RHXKL_CompleteZeroCopy(int socket);
-    PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout);
     PosixResult RHXKL_Disconnect(int fd);
 }
 
@@ -1189,38 +1188,6 @@ PosixResult RHXKL_CompleteZeroCopy(int socket)
     } while (true);
 }
 #pragma clang diagnostic pop
-
-PosixResult RHXKL_CompleteZeroCopyBlocking(int socket, int timeout)
-{
-    struct pollfd fds =
-    {
-        .fd = socket,
-        .events = 0,
-        .revents = 0
-    };
-
-    PosixResult rv;
-    do
-    {
-        int pollRv;
-        while (CheckInterrupted(pollRv = static_cast<int>(poll(&fds, 1, timeout))));
-        if (poll(&fds, 1, -1) == 1)
-        {
-            rv = RHXKL_CompleteZeroCopy(socket);
-        }
-        else
-        {
-            if (pollRv == 0)
-            {
-                pollRv = -1;
-                errno = ETIME;
-            }
-            return ToPosixResult(pollRv);
-        }
-    } while (rv == PosixResultForErrno(EAGAIN));
-
-    return rv;
-}
 
 PosixResult RHXKL_Disconnect(int fd)
 {

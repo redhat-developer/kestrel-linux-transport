@@ -156,6 +156,8 @@ namespace Tests
                 }
             }
             catch
+            { }
+            finally
             {
                 input.Complete();
                 output.Complete();
