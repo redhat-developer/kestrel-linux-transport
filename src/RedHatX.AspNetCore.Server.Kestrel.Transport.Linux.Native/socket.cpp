@@ -63,7 +63,7 @@ extern "C"
     PosixResult RHXKL_GetAvailableBytes(intptr_t socket);
     PosixResult RHXKL_Listen(intptr_t socket, int backlog);
     PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, intptr_t* acceptedSocket);
-    PosixResult RHXKL_Shutdown(int socket, int32_t socketShutdown);
+    PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown);
     PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen, int flags);
     PosixResult RHXKL_Receive(int socket, IOVector* ioVectors, int ioVectorLen);
     PosixResult RHXKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
@@ -813,8 +813,10 @@ PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, in
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Shutdown(int fd, int32_t socketShutdown)
+PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown)
 {
+    int fd = ToFileDescriptor(socket);
+
     int how;
     switch (socketShutdown)
     {

@@ -83,7 +83,7 @@ namespace Tests
                     // receive returns EOF                
                     byte[] receiveBuffer = new byte[10];
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
-                    Assert.Equal(0, received);          
+                    Assert.Equal(0, received);
 
                     // send returns EPIPE
                     var exception = Assert.Throws<IOException>(() =>
