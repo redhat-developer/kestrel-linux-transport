@@ -82,4 +82,4 @@ defaults to true.
 
 - **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number of logical processors in the system.
 
-- **CheckAvailable**: When set to _true_ the Transport tries to read all available data. When set to _false_ it reads 1 buffer (page size, e.g. 4K). This defaults to true.
+- **CheckAvailable**: When set to _true_ the Transport tries to read all available data. When set to _false_ it reads 1 buffer at a time (page size, e.g. 4K). This defaults to true.
