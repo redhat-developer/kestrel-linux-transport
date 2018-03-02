@@ -17,9 +17,31 @@ namespace Tests
         [InlineData(true)]
         [InlineData(false)]
         [Theory]
-        public async Task Echo(bool deferAccept)
+        public async Task Echo_DeferAccept(bool deferAccept)
         {
             using (var testServer = new TestServer(new TestServerOptions() { DeferAccept = deferAccept }))
+            {
+                await testServer.BindAsync();
+                using (var client = testServer.ConnectTo())
+                {
+                    // Send some bytes
+                    byte[] sendBuffer = new byte[] { 1, 2, 3 };
+                    client.Send(new ArraySegment<byte>(sendBuffer));
+
+                    // Read the echo
+                    byte[] receiveBuffer = new byte[10];
+                    var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
+                    Assert.Equal(sendBuffer.Length, received);
+                }
+            }
+        }
+
+        [InlineData(true)]
+        [InlineData(false)]
+        [Theory]
+        public async Task Echo_CheckAvailable(bool checkAvailable)
+        {
+            using (var testServer = new TestServer(new TestServerOptions() { CheckAvailable = checkAvailable }))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
