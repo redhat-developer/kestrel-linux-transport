@@ -60,6 +60,7 @@ namespace SampleApp
                 // Console.WriteLine("\t-c<cpus> Cpus for transport threads (implies ta, count = default for -t)");
                 Console.WriteLine("\tnoda     No deferred accept");
                 Console.WriteLine("\tnods     No deferred send");
+                Console.WriteLine("\tnoca     Read single buffer");
                 return;
             }
 
@@ -74,6 +75,7 @@ namespace SampleApp
             bool ds = !args.Contains("nods");
             bool da = !args.Contains("noda");
             bool tt = !args.Contains("nott");
+            bool ca = !args.Contains("noca");
             _log = args.Contains("log");
             int threadCount = 0;
             int zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
@@ -113,7 +115,7 @@ namespace SampleApp
             else
             {
                 // Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
-                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}, ZeroCopyThreshold={zeroCopyThreshold}, DeferSend={ds}");
+                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}, ZeroCopyThreshold={zeroCopyThreshold}, DeferSend={ds}, CheckAvailable={ca}");
             }
 
             var hostBuilder = new WebHostBuilder()
@@ -138,6 +140,7 @@ namespace SampleApp
                     options.DeferSend = ds;
                     options.ZeroCopyThreshold = zeroCopyThreshold;
                     options.ZeroCopy = true;
+                    options.CheckAvailable = ca;
                     //options.CpuSet = cpuSet;
                 });
             }

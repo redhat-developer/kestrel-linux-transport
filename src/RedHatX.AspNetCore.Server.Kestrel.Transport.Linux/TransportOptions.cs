@@ -17,6 +17,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public bool ZeroCopy { get; set; } = false;
 
+        public bool CheckAvailable { get; set; } = true;
+
         internal CpuSet CpuSet { get; set; }
 
         public int ThreadCount
