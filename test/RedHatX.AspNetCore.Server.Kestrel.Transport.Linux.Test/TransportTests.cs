@@ -62,19 +62,28 @@ namespace Tests
         [Fact]
         public async Task StopDisconnectsClient()
         {
-            using (var testServer = new TestServer())
+            var outputTcs = new TaskCompletionSource<PipeWriter>();
+            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            {
+                outputTcs.SetResult(output);
+            };
+            using (var testServer = new TestServer(connectionHandler))
             {
                 await testServer.BindAsync();
 
                 using (var client = testServer.ConnectTo())
                 {
+                    // Server shutdown:
                     await testServer.UnbindAsync();
+                    // Complete existing connections
+                    PipeWriter clientOutput = await outputTcs.Task;
+                    clientOutput.Complete(new ConnectionAbortedException());
                     await testServer.StopAsync();
 
                     // receive returns EOF                
                     byte[] receiveBuffer = new byte[10];
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
-                    Assert.Equal(0, received);
+                    Assert.Equal(0, received);          
 
                     // send returns EPIPE
                     var exception = Assert.Throws<IOException>(() =>
@@ -158,20 +167,23 @@ namespace Tests
                     null, Timeout.Infinite, Timeout.Infinite
                 );
 
-                bool flushCompleted;
-                do
+                try
                 {
-                    var memory = output.GetMemory(bufferSize);
-                    output.Advance(bufferSize);
+                    do
+                    {
+                        var memory = output.GetMemory(bufferSize);
+                        output.Advance(bufferSize);
 
-                    // If it takes 1 second to write, assume the socket
-                    // is no longer writable
-                    writeTimeout.Change(1000, Timeout.Infinite);
-                    var flushResult = await output.FlushAsync();
-                    flushCompleted = flushResult.IsCompleted;
-                    // cancel the timeout
-                    writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
-                } while (!flushCompleted);
+                        // If it takes 1 second to write, assume the socket
+                        // is no longer writable
+                        writeTimeout.Change(1000, Timeout.Infinite);
+                        var flushResult = await output.FlushAsync();
+                        // cancel the timeout
+                        writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
+                    } while (true);
+                }
+                catch
+                { }
 
                 waitingForTimeout.SetResult(null);
 
@@ -199,17 +211,8 @@ namespace Tests
             TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
                 output.Complete();
-                bool expectedException = false;
-                try
-                {
-                    await input.ReadAsync();
-                }
-                catch (ConnectionAbortedException)
-                {
-                    expectedException = true;
-                    inputCompletedTcs.SetResult(null);
-                }
-                Assert.True(expectedException);
+                await input.ReadAsync();
+                inputCompletedTcs.SetResult(null);
             };
 
             using (var testServer = new TestServer(connectionHandler))
@@ -275,7 +278,7 @@ namespace Tests
         {
             // server send 1M bytes which are an int counter
             // client receives and checkes the counting
-            const int sendLength = 1000000;
+            const int sendLength = 1_000_000;
             TestServerConnectionHandler connectionHandler = async (input, output) =>
             {
                 FillBuffer(output, sendLength / 4);

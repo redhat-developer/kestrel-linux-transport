@@ -82,9 +82,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         [DllImport(Interop.Library, EntryPoint="RHXKL_CompleteZeroCopy")]
         public extern static PosixResult CompleteZeroCopy(int socket);
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_CompleteZeroCopyBlocking")]
-        public extern static PosixResult CompleteZeroCopyBlocking(int socket, int timeout);
-
         [DllImport(Interop.Library, EntryPoint="RHXKL_Disconnect")]
         public extern static PosixResult Disconnect(int socket);
 

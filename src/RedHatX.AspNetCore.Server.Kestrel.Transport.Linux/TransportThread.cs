@@ -526,7 +526,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     statReadEvents += readableSockets.Count;
                     for (int i = 0; i < readableSockets.Count; i++)
                     {
-                        readableSockets[i].CompleteReadable();
+                        TSocket socket = readableSockets[i];
+                        int availableBytes = socket.Socket.GetAvailableBytes(); // TODO: add Option to disable reading available
+                        var receiveResult = Receive(socket, availableBytes);
+                        socket.CompleteReadable(receiveResult); // TODO: rename Read -> Receive
                     }
                     readableSockets.Clear();
 
@@ -757,7 +760,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             finally
             {
-                tsocket.StopReadFromSocket();
+                tsocket.StopReadFromSocket(tsocket.OutputError);
 
                 CleanupSocketEnd(tsocket);
             }
@@ -810,9 +813,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             if (zerocopy)
             {
-                // If we have a pending Readable event, it will report on the zero-copy completion too.
                 lock (tsocket.Gate)
                 {
+                    // Don't start new zerocopies when writting stopped.
+                    if ((tsocket.Flags & SocketFlags.WriteStopped) != SocketFlags.None)
+                    {
+                        return (new PosixResult(PosixResult.ECONNABORTED), zeroCopyRegistered);
+                    }
+
+                    // If we have a pending Readable event, it will report on the zero-copy completion too.
                     if ((tsocket.PendingEventState & EPollEvents.Readable) != EPollEvents.None)
                     {
                         tsocket.PendingEventState |= EPollEvents.Error;
@@ -847,19 +856,56 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void RegisterForZeroCopyWritten(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Error);
 
-        private static void RegisterFor(TSocket tsocket, EPollEvents ev)
+        private static void OnWritableCompleted(TSocket tsocket, Action continuation)
         {
+            bool complete = false;
             lock (tsocket.Gate)
             {
-                var pendingEventState = tsocket.PendingEventState;
-                bool registered = (pendingEventState & TSocket.EventControlRegistered) != EPollEvents.None;
-                pendingEventState |= TSocket.EventControlRegistered | ev;
-                tsocket.PendingEventState = pendingEventState;
+                complete = !tsocket.RegisterForWritable(continuation);
+            }
+            if (complete)
+            {
+                continuation();
+            }
+        }
 
-                if ((pendingEventState & TSocket.EventControlPending) == EPollEvents.None)
-                {
-                    UpdateEPollControl(tsocket, pendingEventState, registered);
-                }
+        private static void OnReadableCompleted(TSocket tsocket, Action continuation)
+        {
+            bool complete = false;
+            lock (tsocket.Gate)
+            {
+                complete = !tsocket.RegisterForReadable(continuation);
+            }
+            if (complete)
+            {
+                continuation();
+            }
+        }
+
+        private static void OnZeroCopyWrittenCompleted(TSocket tsocket, bool registered, Action continuation)
+        {
+            bool complete = false;
+            lock (tsocket.Gate)
+            {
+                complete = !tsocket.RegisterForZeroCopyWritten(registered, continuation);
+            }
+            if (complete)
+            {
+                continuation();
+            }
+        }
+
+        private static void RegisterFor(TSocket tsocket, EPollEvents ev)
+        {
+            // called under tsocket.Gate
+            var pendingEventState = tsocket.PendingEventState;
+            bool registered = (pendingEventState & TSocket.EventControlRegistered) != EPollEvents.None;
+            pendingEventState |= TSocket.EventControlRegistered | ev;
+            tsocket.PendingEventState = pendingEventState;
+
+            if ((pendingEventState & TSocket.EventControlPending) == EPollEvents.None)
+            {
+                UpdateEPollControl(tsocket, pendingEventState, registered);
             }
         }
 
@@ -874,52 +920,51 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         EPollData(tsocket.Fd));
         }
 
+        internal static readonly Exception EofSentinel = new Exception();
+        internal static readonly Exception EAgainSentinel = new Exception();
+
         private static async void ReadFromSocket(TSocket tsocket, bool dataMayBeAvailable)
         {
+            // TODO: re-implement dataMayBeAvailable
             Exception error = null;
             try
             {
-                var availableBytes = dataMayBeAvailable ? tsocket.Socket.GetAvailableBytes() : 0;
-                bool readable0 = true;
-                if (availableBytes == 0
-                 && (readable0 = await Readable(tsocket))) // Readable
+                do
                 {
-                    availableBytes = tsocket.Socket.GetAvailableBytes();
-                }
-                else if (!readable0)
-                {
-                    error = new ConnectionAbortedException();
-                }
-                while (availableBytes != 0)
-                {
-                    try
+                    var readError = await Readable(tsocket);
+                    if (readError == null)
                     {
-                        error = Receive(tsocket.Fd, availableBytes, tsocket.Input);
-                        if (error != null)
+                        try
                         {
+                            var flushResult = await tsocket.Input.FlushAsync();
+                            if (flushResult.IsCompleted || // Reader has stopped
+                                flushResult.IsCancelled)   // TransportThread has stopped
+                            {
+                                error = new ConnectionAbortedException();
+                                break;
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            tsocket.Input.Commit();
+                            error = e;
                             break;
                         }
-                        availableBytes = 0;
-                        var flushResult = await tsocket.Input.FlushAsync();
-                        bool readable = true;
-                        if (!flushResult.IsCompleted // Reader hasn't stopped
-                         && !flushResult.IsCancelled // TransportThread hasn't stopped
-                         && (readable = await Readable(tsocket))) // Readable
-                        {
-                            availableBytes = tsocket.Socket.GetAvailableBytes();
-                        }
-                        else if (flushResult.IsCancelled || !readable)
-                        {
-                            error = new ConnectionAbortedException();
-                        }
                     }
-                    catch (Exception e)
+                    else if (readError == EAgainSentinel)
                     {
-                        availableBytes = 0;
-                        tsocket.Input.Commit();
-                        error = e;
+                        // Loop
                     }
-                }
+                    else if (readError == EofSentinel)
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        error = readError;
+                        break;
+                    }
+                } while (true);
             }
             catch (Exception ex)
             {
@@ -936,8 +981,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe Exception Receive(int fd, int availableBytes, PipeWriter writer)
+        private static unsafe Exception Receive(TSocket socket, int availableBytes = 0)
         {
+            int fd = socket.Fd;
+            PipeWriter writer = socket.Input;
             Memory<byte> memory = writer.GetMemory(2048);
 
             int ioVectorLength = availableBytes <= memory.Length ? 1 :
@@ -991,7 +1038,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         // We made it!
                         writer.Advance(received - advanced);
-                        return null;
+                        return received == 0 ? EofSentinel : null;
                     }
                     eAgainCount = 0;
                     // Update ioVectors to match bytes read
@@ -1007,6 +1054,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                 {
+                    if (expectedMin == 0)
+                    {
+                        return EAgainSentinel;
+                    }
                     eAgainCount++;
                     if (eAgainCount == MaxEAgainCount)
                     {
@@ -1026,40 +1077,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void CleanupSocketEnd(TSocket tsocket)
         {
-            int fd;
-            bool bothClosed = false;
-            bool completeZeroCopy = false;
             lock (tsocket.Gate)
             {
-                bothClosed = tsocket.CloseEnd();
+                bool bothClosed = tsocket.CloseEnd();
                 if (!bothClosed)
                 {
                     return;
                 }
-
-                fd = tsocket.Fd;
-                // terminate pending zero copy
-                if ((tsocket.PendingEventState & EPollEvents.Error) != EPollEvents.None)
-                {
-                    completeZeroCopy = true;
-                    // Disconnect under lock and clear Error to ensure the EPoll thread will not try to complete this.
-                    SocketInterop.Disconnect(fd);
-                    tsocket.PendingEventState &= ~EPollEvents.Error;
-                }
             }
 
-            if (completeZeroCopy)
-            {
-                var result = SocketInterop.CompleteZeroCopyBlocking(fd, timeout: 60 * 1000 /* ms */);
-                if (!result.IsSuccess)
-                {
-                    Environment.FailFast($"Could not terminate pending zerocopy: {result}");
-                }
-            }
             tsocket.Output.Complete(tsocket.OutputError);
 
             // First remove from the Dictionary, so we can't match with a new fd.
-            tsocket.ThreadContext.RemoveSocket(fd);
+            tsocket.ThreadContext.RemoveSocket(tsocket.Fd);
 
             // We are not using SafeHandles to increase performance.
             // We get here when both reading and writing has stopped

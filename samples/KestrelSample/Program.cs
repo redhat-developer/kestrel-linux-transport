@@ -113,7 +113,7 @@ namespace SampleApp
             else
             {
                 // Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
-                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}, ZeroCopyThreshold={zeroCopyThreshold}");
+                Console.WriteLine($"Using Linux Transport: ThreadCount={threadCount}, DeferAccept={da}, UseTransportThread={tt}, ZeroCopyThreshold={zeroCopyThreshold}, DeferSend={ds}");
             }
 
             var hostBuilder = new WebHostBuilder()
