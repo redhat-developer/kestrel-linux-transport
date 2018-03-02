@@ -150,31 +150,31 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (completeReadable)
                 {
-                    _readableCompletion();
+                    _receiveCompletion();
                 }
             }
 
-            private Action _readableCompletion;
+            private Action _receiveCompletion;
             private Exception _readResult;
 
-            public bool RegisterForReadable(Action continuation)
+            public bool RegisterForReceive(Action continuation)
             {
                 // called under tsocket.Gate
                 if ((Flags & SocketFlags.ReadStopped) != SocketFlags.None)
                 {
                     return false;
                 }
-                _readableCompletion = continuation;
+                _receiveCompletion = continuation;
                 TransportThread.RegisterForReadable(this);
                 return true;
             }
 
-            public Exception ReadResult() => _readResult;
+            public Exception ReceiveResult() => _readResult;
 
-            public void CompleteReadable(Exception result)
+            public void CompleteReceive(Exception result)
             {
                 _readResult = result;
-                _readableCompletion();
+                _receiveCompletion();
             }
 
             private Action _zeroCopyWrittenCompletion;
@@ -225,25 +225,25 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public override PipeScheduler OutputReaderScheduler => ThreadContext.SendScheduler;
         }
 
-        struct ReadableAwaitable: ICriticalNotifyCompletion
+        struct ReceiveAwaitable: ICriticalNotifyCompletion
         {
             private readonly TSocket _tsocket;
 
-            public ReadableAwaitable(TSocket awaiter)
+            public ReceiveAwaitable(TSocket awaiter)
             {
                 _tsocket = awaiter;
             }
 
             public bool IsCompleted => false;
 
-            public Exception GetResult() => _tsocket.ReadResult();
+            public Exception GetResult() => _tsocket.ReceiveResult();
 
-            public ReadableAwaitable GetAwaiter() => this;
+            public ReceiveAwaitable GetAwaiter() => this;
 
             public void UnsafeOnCompleted(Action continuation) => OnCompleted(continuation);
 
             public void OnCompleted(Action continuation)
-                => TransportThread.OnReadableCompleted(_tsocket, continuation);
+                => TransportThread.OnReceiveCompleted(_tsocket, continuation);
         }
 
         struct WritableAwaitable: ICriticalNotifyCompletion

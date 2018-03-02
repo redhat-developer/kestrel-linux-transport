@@ -529,7 +529,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         TSocket socket = readableSockets[i];
                         int availableBytes = socket.Socket.GetAvailableBytes(); // TODO: add Option to disable reading available
                         var receiveResult = Receive(socket, availableBytes);
-                        socket.CompleteReadable(receiveResult); // TODO: rename Read -> Receive
+                        socket.CompleteReceive(receiveResult);
                     }
                     readableSockets.Clear();
 
@@ -848,7 +848,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void RegisterForWritable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Writable);
 
-        private static ReadableAwaitable Readable(TSocket tsocket) => new ReadableAwaitable(tsocket);
+        private static ReceiveAwaitable ReceiveAsync(TSocket tsocket) => new ReceiveAwaitable(tsocket);
 
         private static void RegisterForReadable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Readable);
 
@@ -869,12 +869,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static void OnReadableCompleted(TSocket tsocket, Action continuation)
+        private static void OnReceiveCompleted(TSocket tsocket, Action continuation)
         {
             bool complete = false;
             lock (tsocket.Gate)
             {
-                complete = !tsocket.RegisterForReadable(continuation);
+                complete = !tsocket.RegisterForReceive(continuation);
             }
             if (complete)
             {
@@ -931,7 +931,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 do
                 {
-                    var readError = await Readable(tsocket);
+                    var readError = await ReceiveAsync(tsocket);
                     if (readError == null)
                     {
                         try
