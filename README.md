@@ -73,12 +73,13 @@ load-balancing between the listen sockets.
 
 The Transport has these options:
 
-- **DeferAccept**: This uses the `TCP_DEFER_ACCEPT` socket option. Instead of being notified of a new connection when
+- **DeferAccept**: TODO(https://github.com/redhat-developer/kestrel-linux-transport/issues/29) This uses the `TCP_DEFER_ACCEPT` socket option. Instead of being notified of a new connection when
 the TCP connection is set up, the application is notified when the connection was setup and data has arrived. This options
 defaults to true.
 
 - **DeferSend**: This defers sends to the Transport Thread which increases chances for multiple sends to coalesce. This options
 defaults to true.
 
-- **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number processors in `CpuSet` when specified
-and the number of logical processors in the system otherwise.
+- **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number of logical processors in the system.
+
+- **CheckAvailable**: When set to _true_ the Transport tries to read all available data. When set to _false_ it reads 1 buffer (page size, e.g. 4K). This defaults to true.
