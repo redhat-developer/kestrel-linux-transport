@@ -9,7 +9,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         internal bool ReceiveOnIncomingCpu { get; set; } = false;
 
-        public bool DeferAccept { get; set; } = true;
+        public bool DeferAccept { get; set; } = false;
 
         public bool DeferSend { get; set; } = true;
 
