@@ -19,6 +19,7 @@ namespace Tests
     {
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
+        public bool CheckAvailable { get; set; } = true;
         public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
         public string UnixSocketPath { get; set; }
     }
@@ -47,7 +48,8 @@ namespace Tests
             var transportOptions = new LinuxTransportOptions()
             {
                 ThreadCount = options.ThreadCount,
-                DeferAccept = options.DeferAccept
+                DeferAccept = options.DeferAccept,
+                CheckAvailable = options.CheckAvailable
             };
             var loggerFactory = new LoggerFactory();
             loggerFactory.AddConsole((n, l) => false);

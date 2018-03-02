@@ -382,6 +382,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 int statZeroCopySuccess = 0;
                 int statZeroCopyCopied = 0;
                 var sockets = threadContext.Sockets;
+                bool checkAvailable = _transportOptions.CheckAvailable;
 
                 var acceptableSockets = new List<TSocket>(1);
                 var readableSockets = new List<TSocket>(EventBufferLength);
@@ -527,7 +528,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     for (int i = 0; i < readableSockets.Count; i++)
                     {
                         TSocket socket = readableSockets[i];
-                        int availableBytes = socket.Socket.GetAvailableBytes(); // TODO: add Option to disable reading available
+                        int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
                         var receiveResult = Receive(socket, availableBytes);
                         socket.CompleteReceive(receiveResult);
                     }
