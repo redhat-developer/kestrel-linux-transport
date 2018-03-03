@@ -1,10 +1,13 @@
 using System;
 using System.Buffers;
+using System.Collections;
 using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Microsoft.AspNetCore.Protocols;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using SequencePosition = System.Collections.SequencePosition;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -36,27 +39,41 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         class TSocket : TransportConnection
         {
-            public const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
+            public int ZeroCopyThreshold;
+            public readonly object Gate = new object();
+            public ThreadContext ThreadContext;
+            public int         Fd;
+            public Socket      Socket;
+            private int _flags;
+            private Exception   _outputCompleteError;
+            private Exception _inputCompleteError;
+            private ValueAwaiter<ReadResult> _readAwaiter;
+            private ValueAwaiter<FlushResult> _flushAwaiter;
+            private int _zeropCopyState;
+            private SequencePosition _zeroCopyEnd;
+            private readonly Action _onFlushedToApp;
+            private readonly Action _onReadFromApp;
+
+            private const int ZeroCopyNone = 0;
+            private const int ZeroCopyComplete = 1;
+            private const int ZeroCopyAwait = 2;
+            private const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
             public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
 
             public TSocket(ThreadContext threadContext, SocketFlags flags)
             {
                 ThreadContext = threadContext;
                 _flags = (int)flags;
+                _onFlushedToApp = new Action(OnFlushedToApp);
+                _onReadFromApp = new Action(OnReadFromApp);
             }
-            private static readonly Action _completedSentinel = delegate { };
 
-            private int _flags;
             public SocketFlags Flags
             {
                 get { return (SocketFlags)_flags; }
             }
 
             public SocketFlags Type => ((SocketFlags)_flags & SocketFlags.TypeMask);
-
-            public int ZeroCopyThreshold;
-
-            public readonly object Gate = new object();
 
             // must be called under Gate
             public EPollEvents PendingEventState
@@ -65,41 +82,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 set => _flags = (int)value;
             }
 
-            // must be called under Gate
-            public bool CloseEnd()
-            {
-                _flags = _flags + (int)SocketFlags.CloseEnd;
-                return (_flags & (int)SocketFlags.BothClosed) != 0;
-            }
-
-            public ThreadContext ThreadContext;
-            public int         Fd;
-            public Socket      Socket;
-            public Exception   OutputError;
-
-            private Action _writableCompletion;
-
-            public bool RegisterForWritable(Action continuation)
-            {
-                // called under tsocket.Gate
-                if ((Flags & SocketFlags.WriteStopped) != SocketFlags.None)
-                {
-                    return false;
-                }
-                _writableCompletion = continuation;
-                TransportThread.RegisterForWritable(this);
-                return true;
-            }
-
-            public bool IsWritable() => (Flags & SocketFlags.WriteStopped) == SocketFlags.None;
-
-            public void CompleteWritable()
-            {
-                Action continuation = Interlocked.Exchange(ref _writableCompletion, null);
-                continuation.Invoke();
-            }
-
-            public void StopWriteToSocket()
+            private void StopWriteToSocket()
             {
                 bool completeWritable = false;
                 lock (Gate)
@@ -125,11 +108,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (completeWritable)
                 {
-                    _writableCompletion();
+                    OnWritable(stopped: true);
                 }
             }
 
-            public void StopReadFromSocket(Exception exception)
+            private void StopReadFromSocket(Exception exception)
             {
                 bool completeReadable = false;
                 lock (Gate)
@@ -145,150 +128,529 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     flags &= ~SocketFlags.AwaitReadable;
                     flags |= SocketFlags.ReadStopped;
-                    _readResult = exception ?? TransportThread.EofSentinel;
+                    _inputCompleteError = exception ?? TransportThread.EofSentinel;
                     _flags = (int)flags;
                 }
                 if (completeReadable)
                 {
-                    _receiveCompletion();
+                    OnReceiveFromSocket(_inputCompleteError);
                 }
             }
 
-            private Action _receiveCompletion;
-            private Exception _readResult;
-
-            public bool RegisterForReceive(Action continuation)
+            private void WriteToSocket()
             {
-                // called under tsocket.Gate
-                if ((Flags & SocketFlags.ReadStopped) != SocketFlags.None)
-                {
-                    return false;
-                }
-                _receiveCompletion = continuation;
-                TransportThread.RegisterForReadable(this);
-                return true;
+                Output.OnWriterCompleted(CompleteWriteToSocket, this);
+                ReadFromApp();
             }
 
-            public Exception ReceiveResult() => _readResult;
-
-            public void CompleteReceive(Exception result)
+            private void ReadFromApp()
             {
-                _readResult = result;
-                _receiveCompletion();
-            }
-
-            private Action _zeroCopyWrittenCompletion;
-
-            public bool RegisterForZeroCopyWritten(bool registered, Action continuation)
-            {
-                // called under tsocket.Gate
-                if (registered)
+                bool loop = true;
+                do
                 {
-                    var oldValue = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, continuation, null);
-                    if (ReferenceEquals(oldValue, _completedSentinel))
+                    _readAwaiter = Output.ReadAsync();
+                    if (_readAwaiter.IsCompleted)
                     {
-                        // Already completed, no need to register
-                        Volatile.Write(ref _zeroCopyWrittenCompletion, null);
-                        return false;
+                        loop = OnReadFromApp(loop);
                     }
                     else
                     {
-                        // Already registered
-                        return true;
+                        _readAwaiter.UnsafeOnCompleted(_onReadFromApp);
+                        loop = false;
+                    }
+                } while (loop);
+            }
+
+            private void OnReadFromApp()
+            {
+                OnReadFromApp(loop: false);
+            }
+
+            private bool OnReadFromApp(bool loop)
+            {
+                Exception error = null;
+                bool stop = false;
+                try
+                {
+                    var readResult = _readAwaiter.GetResult();
+                    ReadOnlyBuffer<byte> buffer = readResult.Buffer;
+                    SequencePosition end = buffer.Start;
+                    bool zerocopy = false;
+                    bool zeroCopyRegistered = false;
+                    if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
+                    {
+                        // EOF or TransportThread stopped
+                        stop = true;
+                    }
+                    else if (!buffer.IsEmpty)
+                    {
+                        zerocopy = buffer.Length >= ZeroCopyThreshold;
+                        PosixResult result;
+                        (result, zeroCopyRegistered) = TrySend(zerocopy, ref buffer);
+                        if (result.Value == buffer.Length)
+                        {
+                            end = buffer.End;
+                        }
+                        else if (result.IsSuccess)
+                        {
+                            end = buffer.GetPosition(buffer.Start, result.Value);
+                        }
+                        else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                        {
+                            Output.AdvanceTo(end);
+                            WaitSocketWritable();
+                            return false;
+                        }
+                        else if (zerocopy && result == PosixResult.ENOBUFS)
+                        {
+                            // We reached the max locked memory (ulimit -l), disable zerocopy.
+                            ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                        }
+                        else
+                        {
+                            error = result.AsException();
+                            stop = true;
+                        }
+                        if (zerocopy)
+                        {
+                            if (result.Value > 0)
+                            {
+                                _zeroCopyEnd = end;
+                            }
+                            else
+                            {
+                                zerocopy = false;
+                            }
+                        }
+                    }
+                    if (zerocopy)
+                    {
+                        return WaitZeroCopyComplete(loop, zeroCopyRegistered);
+                    }
+                    else
+                    {
+                        // We need to call Advance to end the read
+                        Output.AdvanceTo(end);
+                    }
+                }
+                catch (Exception e)
+                {
+                    stop = true;
+                    error = e;
+                }
+                if (stop)
+                {
+                    CompleteOutput(error);
+                    loop = false;
+                }
+                else
+                {
+                    if (!loop)
+                    {
+                        ReadFromApp();
+                    }
+                }
+                return loop;
+            }
+
+            private bool WaitZeroCopyComplete(bool loop, bool registered)
+            {
+                if (registered)
+                {
+                    int previousState = Interlocked.CompareExchange(ref _zeropCopyState, ZeroCopyAwait, ZeroCopyNone);
+                    if (previousState == ZeroCopyComplete)
+                    {
+                        // registered, complete
+                        Volatile.Write(ref _zeropCopyState, ZeroCopyNone);
+                        Output.AdvanceTo(_zeroCopyEnd);
+                        _zeroCopyEnd = default(SequencePosition);
+                        if (!loop)
+                        {
+                            ReadFromApp();
+                        }
+                        return loop;
+                    }
+                    else
+                    {
+                        // registered, not completed
+                        return false;
                     }
                 }
                 else
                 {
-                    // Register now
-                    _zeroCopyWrittenCompletion = continuation;
-                    TransportThread.RegisterForZeroCopyWritten(this);
-                    return true;
+                    // not registered
+                    lock (Gate)
+                    {
+                        RegisterFor(EPollEvents.Error);
+                    }
+                    return false;
                 }
             }
 
             public void CompleteZeroCopy()
             {
-                Action continuation = Interlocked.CompareExchange(ref _zeroCopyWrittenCompletion, _completedSentinel, null);
-                if (!ReferenceEquals(continuation, null))
+                int previousState = Interlocked.CompareExchange(ref _zeropCopyState, ZeroCopyAwait, ZeroCopyNone);
+                if (previousState == ZeroCopyAwait)
                 {
-                    Volatile.Write(ref _zeroCopyWrittenCompletion, null);
-                    continuation();
+                    Volatile.Write(ref _zeropCopyState, ZeroCopyNone);
+                    Output.AdvanceTo(_zeroCopyEnd);
+                    _zeroCopyEnd = default(SequencePosition);
+                    ReadFromApp();
                 }
             }
 
-            public bool IsZeroCopyFinished() => (Flags & SocketFlags.WriteStopped) == SocketFlags.None;
+            private void CompleteOutput(Exception e)
+            {
+                _outputCompleteError = e;
+                StopReadFromSocket(e);
+                CleanupSocketEnd();
+            }
+
+            private void WaitSocketWritable()
+            {
+                bool stopped = false;
+                lock (Gate)
+                {
+                    stopped = (Flags & SocketFlags.WriteStopped) != SocketFlags.None;
+                    if (!stopped)
+                    {
+                        RegisterFor(EPollEvents.Writable);
+                    }
+                }
+                if (stopped)
+                {
+                    OnWritable(true);
+                }
+            }
+
+            public void OnWritable(bool stopped)
+            {
+                if (stopped)
+                {
+                    CompleteOutput(null);
+                }
+                else
+                {
+                    ReadFromApp();
+                }
+            }
+
+            private void RegisterFor(EPollEvents ev)
+            {
+                // called under tsocket.Gate
+                var pendingEventState = PendingEventState;
+                bool registered = (pendingEventState & TSocket.EventControlRegistered) != EPollEvents.None;
+                pendingEventState |= TSocket.EventControlRegistered | ev;
+                PendingEventState = pendingEventState;
+
+                if ((pendingEventState & TSocket.EventControlPending) == EPollEvents.None)
+                {
+                    TransportThread.UpdateEPollControl(this, pendingEventState, registered);
+                }
+            }
+
+            private static void CompleteWriteToSocket(Exception ex, object state)
+            {
+                if (ex != null)
+                {
+                    var tsocket = (TSocket)state;
+                    tsocket.StopWriteToSocket();
+                }
+            }
+
+            private void CleanupSocketEnd()
+            {
+                lock (Gate)
+                {
+                    _flags = _flags + (int)SocketFlags.CloseEnd;
+                    if ((_flags & (int)SocketFlags.BothClosed) != 0)
+                    {
+                        return;
+                    }
+                }
+
+                Output.Complete(_outputCompleteError);
+
+                // First remove from the Dictionary, so we can't match with a new fd.
+                ThreadContext.RemoveSocket(Fd);
+
+                // We are not using SafeHandles to increase performance.
+                // We get here when both reading and writing has stopped
+                // so we are sure this is the last use of the Socket.
+                Socket.Dispose();
+            }
+
+            public unsafe Exception Receive(int availableBytes = 0)
+            {
+                PipeWriter writer = Input;
+                Memory<byte> memory = writer.GetMemory(2048);
+
+                int ioVectorLength = availableBytes <= memory.Length ? 1 :
+                        Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
+                var ioVectors = stackalloc IOVector[ioVectorLength];
+                var allocated = 0;
+
+                var advanced = 0;
+                int ioVectorsUsed = 0;
+                for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
+                {
+                    var length = memory.Length;
+                    var bufferHandle = memory.Retain(pin: true);
+                    ioVectors[ioVectorsUsed].Base = bufferHandle.Pointer;
+                    ioVectors[ioVectorsUsed].Count = (void*)length;
+                    // It's ok to unpin the handle here because the memory is from the pool
+                    // we created, which is already pinned.
+                    bufferHandle.Dispose();
+                    allocated += length;
+
+                    if (allocated >= availableBytes)
+                    {
+                        // Every Memory (except the last one) must be filled completely.
+                        ioVectorsUsed++;
+                        break;
+                    }
+
+                    writer.Advance(length);
+                    advanced += length;
+                    memory = writer.GetMemory(1);
+                }
+                var expectedMin = Math.Min(availableBytes, allocated);
+
+                // Ideally we get availableBytes in a single receive
+                // but we are happy if we get at least a part of it
+                // and we are willing to take {MaxEAgainCount} EAGAINs.
+                // Less data could be returned due to these reasons:
+                // * TCP URG
+                // * packet was not placed in receive queue (race with FIONREAD)
+                // * ?
+                const int MaxEAgainCount = 10;
+                var eAgainCount = 0;
+                var received = 0;
+                do
+                {
+                    var result = SocketInterop.Receive(Fd, ioVectors, ioVectorsUsed);
+                    if (result.IsSuccess)
+                    {
+                        received += result.Value;
+                        if (received >= expectedMin)
+                        {
+                            // We made it!
+                            writer.Advance(received - advanced);
+                            return received == 0 ? EofSentinel : null;
+                        }
+                        eAgainCount = 0;
+                        // Update ioVectors to match bytes read
+                        var skip = result.Value;
+                        for (int i = 0; (i < ioVectorsUsed) && (skip > 0); i++)
+                        {
+                            var length = (int)ioVectors[i].Count;
+                            var skipped = Math.Min(skip, length);
+                            ioVectors[i].Count = (void*)(length - skipped);
+                            ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
+                            skip -= skipped;
+                        }
+                    }
+                    else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                    {
+                        if (expectedMin == 0)
+                        {
+                            return EAgainSentinel;
+                        }
+                        eAgainCount++;
+                        if (eAgainCount == MaxEAgainCount)
+                        {
+                            return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
+                        }
+                    }
+                    else if (result == PosixResult.ECONNRESET)
+                    {
+                        return new ConnectionResetException(result.ErrorDescription(), result.AsException());
+                    }
+                    else
+                    {
+                        return result.AsException();
+                    }
+                } while (true);
+            }
+
+            private void ReceiveFromSocket()
+            {
+                bool stopped = false;
+                lock (Gate)
+                {
+                    stopped = (Flags & SocketFlags.ReadStopped) != SocketFlags.None;
+                    if (!stopped)
+                    {
+                        RegisterFor(EPollEvents.Readable);
+                    }
+                }
+                if (stopped)
+                {
+                    OnReceiveFromSocket(_inputCompleteError);
+                }
+            }
+
+            public void OnReceiveFromSocket(Exception result)
+            {
+                if (result == null)
+                {
+                    FlushToApp();
+                }
+                else if (result == EAgainSentinel)
+                {
+                    ReceiveFromSocket();
+                }
+                else if (result == EofSentinel)
+                {
+                    CompleteInput(null);
+                }
+                else
+                {
+                    CompleteInput(result);
+                }
+            }
+
+            private void FlushToApp()
+            {
+                _flushAwaiter = Input.FlushAsync();
+                if (_flushAwaiter.IsCompleted)
+                {
+                    OnFlushedToApp();
+                }
+                else
+                {
+                    _flushAwaiter.UnsafeOnCompleted(_onFlushedToApp);
+                }
+            }
+
+            private void OnFlushedToApp()
+            {
+                Exception error = null;
+                try
+                {
+                    FlushResult flushResult = _flushAwaiter.GetResult();
+                    if (flushResult.IsCompleted || // Reader has stopped
+                        flushResult.IsCancelled)   // TransportThread has stopped
+                    {
+                        error = new ConnectionAbortedException();
+                    }
+                }
+                catch (Exception e)
+                {
+                    Input.Commit();
+                    error = e;
+                }
+                if (error == null)
+                {
+                    ReceiveFromSocket();
+                }
+                else
+                {
+                    CompleteInput(error);
+                }
+            }
+
+            private void CompleteInput(Exception error)
+            {
+                Input.Complete(error);
+
+                CleanupSocketEnd();
+            }
+
+            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, ref ReadOnlyBuffer<byte> buffer)
+            {
+                bool zeroCopyRegistered = false;
+                int ioVectorLength = 0;
+                foreach (var memory in buffer)
+                {
+                    if (memory.Length == 0)
+                    {
+                        continue;
+                    }
+                    ioVectorLength++;
+                    if (ioVectorLength == MaxIOVectorSendLength)
+                    {
+                        // No more room in the IOVector
+                        break;
+                    }
+                }
+                if (ioVectorLength == 0)
+                {
+                    return (new PosixResult(0), zeroCopyRegistered);
+                }
+
+                var ioVectors = stackalloc IOVector[ioVectorLength];
+                int i = 0;
+                foreach (var memory in buffer)
+                {
+                    if (memory.Length == 0)
+                    {
+                        continue;
+                    }
+                    var bufferHandle = memory.Retain(pin: true);
+                    ioVectors[i].Base = bufferHandle.Pointer;
+                    // It's ok to unpin the handle here because the memory is from the pool
+                    // we created, which is already pinned.
+                    bufferHandle.Dispose();
+                    ioVectors[i].Count = (void*)memory.Length;
+                    i++;
+                    if (i == ioVectorLength)
+                    {
+                        // No more room in the IOVector
+                        break;
+                    }
+                }
+
+                if (zerocopy)
+                {
+                    lock (Gate)
+                    {
+                        // Don't start new zerocopies when writting stopped.
+                        if ((Flags & SocketFlags.WriteStopped) != SocketFlags.None)
+                        {
+                            return (new PosixResult(PosixResult.ECONNABORTED), zeroCopyRegistered);
+                        }
+
+                        // If we have a pending Readable event, it will report on the zero-copy completion too.
+                        if ((PendingEventState & EPollEvents.Readable) != EPollEvents.None)
+                        {
+                            PendingEventState |= EPollEvents.Error;
+                            zeroCopyRegistered = true;
+                        }
+                    }
+                }
+
+                PosixResult rv = SocketInterop.Send(Fd, ioVectors, ioVectorLength, zerocopy ? MSG_ZEROCOPY : 0);
+
+                if (zerocopy && rv.Value <= 0 && zeroCopyRegistered)
+                {
+                    lock (Gate)
+                    {
+                        PendingEventState &= ~EPollEvents.Error;
+                    }
+                    zeroCopyRegistered = false;
+                }
+
+                return (rv, zeroCopyRegistered);
+            }
+
+            public void Start(bool dataMayBeAvailable)
+            {
+                WriteToSocket();
+                // TODO: implement dataMayBeAvailable
+                ReceiveFromSocket();
+            }
+
+            public void Stop()
+            {
+                StopWriteToSocket();
+            }
 
             public override MemoryPool MemoryPool => ThreadContext.MemoryPool;
 
             public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
 
             public override PipeScheduler OutputReaderScheduler => ThreadContext.SendScheduler;
-        }
-
-        struct ReceiveAwaitable: ICriticalNotifyCompletion
-        {
-            private readonly TSocket _tsocket;
-
-            public ReceiveAwaitable(TSocket awaiter)
-            {
-                _tsocket = awaiter;
-            }
-
-            public bool IsCompleted => false;
-
-            public Exception GetResult() => _tsocket.ReceiveResult();
-
-            public ReceiveAwaitable GetAwaiter() => this;
-
-            public void UnsafeOnCompleted(Action continuation) => OnCompleted(continuation);
-
-            public void OnCompleted(Action continuation)
-                => TransportThread.OnReceiveCompleted(_tsocket, continuation);
-        }
-
-        struct WritableAwaitable: ICriticalNotifyCompletion
-        {
-            private readonly TSocket _tsocket;
-
-            public WritableAwaitable(TSocket awaiter)
-            {
-                _tsocket = awaiter;
-            }
-
-            public bool IsCompleted => false;
-
-            public bool GetResult() => _tsocket.IsWritable();
-
-            public WritableAwaitable GetAwaiter() => this;
-
-            public void UnsafeOnCompleted(Action continuation) => OnCompleted(continuation);
-
-            public void OnCompleted(Action continuation)
-                => TransportThread.OnWritableCompleted(_tsocket, continuation);
-        }
-
-        struct ZeroCopyWrittenAwaitable: ICriticalNotifyCompletion
-        {
-            private readonly TSocket _tsocket;
-            private readonly bool _registered;
-
-            public ZeroCopyWrittenAwaitable(TSocket awaiter, bool registered)
-            {
-                _tsocket = awaiter;
-                _registered = registered;
-            }
-
-            public bool IsCompleted => false;
-
-            public bool GetResult() => _tsocket.IsZeroCopyFinished();
-
-            public ZeroCopyWrittenAwaitable GetAwaiter() => this;
-
-            public void UnsafeOnCompleted(Action continuation)
-                => OnCompleted(continuation);
-
-            public void OnCompleted(Action continuation)
-                => TransportThread.OnZeroCopyWrittenCompleted(_tsocket, _registered, continuation);
         }
     }
 }

@@ -519,7 +519,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     statWriteEvents += writableSockets.Count;
                     for (int i = 0; i < writableSockets.Count; i++)
                     {
-                        writableSockets[i].CompleteWritable();
+                        writableSockets[i].OnWritable(stopped: false);
                     }
                     writableSockets.Clear();
 
@@ -529,8 +529,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         TSocket socket = readableSockets[i];
                         int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
-                        var receiveResult = Receive(socket, availableBytes);
-                        socket.CompleteReceive(receiveResult);
+                        var receiveResult = socket.Receive(availableBytes);
+                        socket.OnReceiveFromSocket(receiveResult);
                     }
                     readableSockets.Clear();
 
@@ -669,9 +669,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     sockets.Add(fd, tsocket);
                 }
 
-                WriteToSocket(tsocket);
                 bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
-                ReadFromSocket(tsocket, dataMayBeAvailable);
+                tsocket.Start(dataMayBeAvailable);
 
                 return 1;
             }
@@ -681,422 +680,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static void CompleteWriteToSocket(Exception ex, object state)
-        {
-            if (ex != null)
-            {
-                var tsocket = (TSocket)state;
-                tsocket.StopWriteToSocket();
-            }
-        }
-
-        private static async void WriteToSocket(TSocket tsocket)
-        {
-            tsocket.Output.OnWriterCompleted(CompleteWriteToSocket, tsocket);
-            try
-            {
-                while (true)
-                {
-                    var readResult = await tsocket.Output.ReadAsync();
-                    ReadOnlyBuffer<byte> buffer = readResult.Buffer;
-                    SequencePosition end = buffer.Start;
-                    try
-                    {
-                        if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
-                        {
-                            // EOF or TransportThread stopped
-                            break;
-                        }
-                        if (!buffer.IsEmpty)
-                        {
-                            bool zerocopy = buffer.Length >= tsocket.ZeroCopyThreshold;
-                            (PosixResult result, bool zerocopyRegistered) = TrySend(tsocket, zerocopy, ref buffer);
-                            if (result.Value == buffer.Length)
-                            {
-                                end = buffer.End;
-                            }
-                            else if (result.IsSuccess)
-                            {
-                                end = buffer.GetPosition(buffer.Start, result.Value);
-                            }
-                            else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
-                            {
-                                if (!await Writable(tsocket))
-                                {
-                                    // TransportThread stopped
-                                    break;
-                                }
-                            }
-                            else if (zerocopy && result == PosixResult.ENOBUFS)
-                            {
-                                // We reached the max locked memory (ulimit -l), disable zerocopy.
-                                tsocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
-                            }
-                            else
-                            {
-                                tsocket.OutputError = result.AsException();
-                                break;
-                            }
-                            if (result.Value > 0 && zerocopy)
-                            {
-                                if (!await ZeroCopyWritten(tsocket, zerocopyRegistered))
-                                {
-                                    // Don't advance when the zero-copy hasn't finished
-                                    end = buffer.Start;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        // We need to call Advance to end the read
-                        tsocket.Output.AdvanceTo(end);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                tsocket.OutputError = ex;
-            }
-            finally
-            {
-                tsocket.StopReadFromSocket(tsocket.OutputError);
-
-                CleanupSocketEnd(tsocket);
-            }
-        }
-
-        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadOnlyBuffer<byte> buffer)
-        {
-            bool zeroCopyRegistered = false;
-            int fd = tsocket.Fd;
-            int ioVectorLength = 0;
-            foreach (var memory in buffer)
-            {
-                if (memory.Length == 0)
-                {
-                    continue;
-                }
-                ioVectorLength++;
-                if (ioVectorLength == MaxIOVectorSendLength)
-                {
-                    // No more room in the IOVector
-                    break;
-                }
-            }
-            if (ioVectorLength == 0)
-            {
-                return (new PosixResult(0), zeroCopyRegistered);
-            }
-
-            var ioVectors = stackalloc IOVector[ioVectorLength];
-            int i = 0;
-            foreach (var memory in buffer)
-            {
-                if (memory.Length == 0)
-                {
-                    continue;
-                }
-                var bufferHandle = memory.Retain(pin: true);
-                ioVectors[i].Base = bufferHandle.Pointer;
-                // It's ok to unpin the handle here because the memory is from the pool
-                // we created, which is already pinned.
-                bufferHandle.Dispose();
-                ioVectors[i].Count = (void*)memory.Length;
-                i++;
-                if (i == ioVectorLength)
-                {
-                    // No more room in the IOVector
-                    break;
-                }
-            }
-
-            if (zerocopy)
-            {
-                lock (tsocket.Gate)
-                {
-                    // Don't start new zerocopies when writting stopped.
-                    if ((tsocket.Flags & SocketFlags.WriteStopped) != SocketFlags.None)
-                    {
-                        return (new PosixResult(PosixResult.ECONNABORTED), zeroCopyRegistered);
-                    }
-
-                    // If we have a pending Readable event, it will report on the zero-copy completion too.
-                    if ((tsocket.PendingEventState & EPollEvents.Readable) != EPollEvents.None)
-                    {
-                        tsocket.PendingEventState |= EPollEvents.Error;
-                        zeroCopyRegistered = true;
-                    }
-                }
-            }
-
-            PosixResult rv = SocketInterop.Send(fd, ioVectors, ioVectorLength, zerocopy ? MSG_ZEROCOPY : 0);
-
-            if (zerocopy && rv.Value <= 0 && zeroCopyRegistered)
-            {
-                lock (tsocket.Gate)
-                {
-                    tsocket.PendingEventState &= ~EPollEvents.Error;
-                }
-                zeroCopyRegistered = false;
-            }
-
-            return (rv, zeroCopyRegistered);
-        }
-
-        private static WritableAwaitable Writable(TSocket tsocket) => new WritableAwaitable(tsocket);
-
-        private static void RegisterForWritable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Writable);
-
-        private static ReceiveAwaitable ReceiveAsync(TSocket tsocket) => new ReceiveAwaitable(tsocket);
-
-        private static void RegisterForReadable(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Readable);
-
-        private static ZeroCopyWrittenAwaitable ZeroCopyWritten(TSocket tsocket, bool registered) => new ZeroCopyWrittenAwaitable(tsocket, registered);
-
-        private static void RegisterForZeroCopyWritten(TSocket tsocket) => RegisterFor(tsocket, EPollEvents.Error);
-
-        private static void OnWritableCompleted(TSocket tsocket, Action continuation)
-        {
-            bool complete = false;
-            lock (tsocket.Gate)
-            {
-                complete = !tsocket.RegisterForWritable(continuation);
-            }
-            if (complete)
-            {
-                continuation();
-            }
-        }
-
-        private static void OnReceiveCompleted(TSocket tsocket, Action continuation)
-        {
-            bool complete = false;
-            lock (tsocket.Gate)
-            {
-                complete = !tsocket.RegisterForReceive(continuation);
-            }
-            if (complete)
-            {
-                continuation();
-            }
-        }
-
-        private static void OnZeroCopyWrittenCompleted(TSocket tsocket, bool registered, Action continuation)
-        {
-            bool complete = false;
-            lock (tsocket.Gate)
-            {
-                complete = !tsocket.RegisterForZeroCopyWritten(registered, continuation);
-            }
-            if (complete)
-            {
-                continuation();
-            }
-        }
-
-        private static void RegisterFor(TSocket tsocket, EPollEvents ev)
-        {
-            // called under tsocket.Gate
-            var pendingEventState = tsocket.PendingEventState;
-            bool registered = (pendingEventState & TSocket.EventControlRegistered) != EPollEvents.None;
-            pendingEventState |= TSocket.EventControlRegistered | ev;
-            tsocket.PendingEventState = pendingEventState;
-
-            if ((pendingEventState & TSocket.EventControlPending) == EPollEvents.None)
-            {
-                UpdateEPollControl(tsocket, pendingEventState, registered);
-            }
-        }
-
-        // must be called under tsocket.Gate
-        private static void UpdateEPollControl(TSocket tsocket, EPollEvents flags, bool registered)
-        {
-            flags &= EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error;
-            EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
-                        registered ? EPollOperation.Modify : EPollOperation.Add,
-                        tsocket.Fd,
-                        flags | EPollEvents.OneShot,
-                        EPollData(tsocket.Fd));
-        }
-
         internal static readonly Exception EofSentinel = new Exception();
         internal static readonly Exception EAgainSentinel = new Exception();
-
-        private static async void ReadFromSocket(TSocket tsocket, bool dataMayBeAvailable)
-        {
-            // TODO: re-implement dataMayBeAvailable
-            Exception error = null;
-            try
-            {
-                do
-                {
-                    var readError = await ReceiveAsync(tsocket);
-                    if (readError == null)
-                    {
-                        try
-                        {
-                            var flushResult = await tsocket.Input.FlushAsync();
-                            if (flushResult.IsCompleted || // Reader has stopped
-                                flushResult.IsCancelled)   // TransportThread has stopped
-                            {
-                                error = new ConnectionAbortedException();
-                                break;
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            tsocket.Input.Commit();
-                            error = e;
-                            break;
-                        }
-                    }
-                    else if (readError == EAgainSentinel)
-                    {
-                        // Loop
-                    }
-                    else if (readError == EofSentinel)
-                    {
-                        break;
-                    }
-                    else
-                    {
-                        error = readError;
-                        break;
-                    }
-                } while (true);
-            }
-            catch (Exception ex)
-            {
-                error = ex;
-            }
-            finally
-            {
-                // even when error == null, we call Abort
-                // this mean receiving FIN causes Abort
-                // rationale: https://github.com/aspnet/KestrelHttpServer/issues/1139#issuecomment-251748845
-                tsocket.Input.Complete(error);
-
-                CleanupSocketEnd(tsocket);
-            }
-        }
-
-        private static unsafe Exception Receive(TSocket socket, int availableBytes = 0)
-        {
-            int fd = socket.Fd;
-            PipeWriter writer = socket.Input;
-            Memory<byte> memory = writer.GetMemory(2048);
-
-            int ioVectorLength = availableBytes <= memory.Length ? 1 :
-                    Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
-            var ioVectors = stackalloc IOVector[ioVectorLength];
-            var allocated = 0;
-
-            var advanced = 0;
-            int ioVectorsUsed = 0;
-            for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
-            {
-                var length = memory.Length;
-                var bufferHandle = memory.Retain(pin: true);
-                ioVectors[ioVectorsUsed].Base = bufferHandle.Pointer;
-                ioVectors[ioVectorsUsed].Count = (void*)length;
-                // It's ok to unpin the handle here because the memory is from the pool
-                // we created, which is already pinned.
-                bufferHandle.Dispose();
-                allocated += length;
-
-                if (allocated >= availableBytes)
-                {
-                    // Every Memory (except the last one) must be filled completely.
-                    ioVectorsUsed++;
-                    break;
-                }
-
-                writer.Advance(length);
-                advanced += length;
-                memory = writer.GetMemory(1);
-            }
-            var expectedMin = Math.Min(availableBytes, allocated);
-
-            // Ideally we get availableBytes in a single receive
-            // but we are happy if we get at least a part of it
-            // and we are willing to take {MaxEAgainCount} EAGAINs.
-            // Less data could be returned due to these reasons:
-            // * TCP URG
-            // * packet was not placed in receive queue (race with FIONREAD)
-            // * ?
-            const int MaxEAgainCount = 10;
-            var eAgainCount = 0;
-            var received = 0;
-            do
-            {
-                var result = SocketInterop.Receive(fd, ioVectors, ioVectorsUsed);
-                if (result.IsSuccess)
-                {
-                    received += result.Value;
-                    if (received >= expectedMin)
-                    {
-                        // We made it!
-                        writer.Advance(received - advanced);
-                        return received == 0 ? EofSentinel : null;
-                    }
-                    eAgainCount = 0;
-                    // Update ioVectors to match bytes read
-                    var skip = result.Value;
-                    for (int i = 0; (i < ioVectorsUsed) && (skip > 0); i++)
-                    {
-                        var length = (int)ioVectors[i].Count;
-                        var skipped = Math.Min(skip, length);
-                        ioVectors[i].Count = (void*)(length - skipped);
-                        ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
-                        skip -= skipped;
-                    }
-                }
-                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
-                {
-                    if (expectedMin == 0)
-                    {
-                        return EAgainSentinel;
-                    }
-                    eAgainCount++;
-                    if (eAgainCount == MaxEAgainCount)
-                    {
-                        return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
-                    }
-                }
-                else if (result == PosixResult.ECONNRESET)
-                {
-                    return new ConnectionResetException(result.ErrorDescription(), result.AsException());
-                }
-                else
-                {
-                    return result.AsException();
-                }
-            } while (true);
-        }
-
-        private static void CleanupSocketEnd(TSocket tsocket)
-        {
-            lock (tsocket.Gate)
-            {
-                bool bothClosed = tsocket.CloseEnd();
-                if (!bothClosed)
-                {
-                    return;
-                }
-            }
-
-            tsocket.Output.Complete(tsocket.OutputError);
-
-            // First remove from the Dictionary, so we can't match with a new fd.
-            tsocket.ThreadContext.RemoveSocket(tsocket.Fd);
-
-            // We are not using SafeHandles to increase performance.
-            // We get here when both reading and writing has stopped
-            // so we are sure this is the last use of the Socket.
-            tsocket.Socket.Dispose();
-        }
 
         private void CloseAccept(ThreadContext threadContext, Dictionary<int, TSocket> sockets)
         {
@@ -1127,9 +712,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             foreach (var kv in clone)
             {
                 var tsocket = kv.Value;
-                tsocket.StopWriteToSocket();
-                // this calls StopReadFromSocket
+                tsocket.Stop();
             }
+        }
+
+        // must be called under tsocket.Gate
+        private static void UpdateEPollControl(TSocket tsocket, EPollEvents flags, bool registered)
+        {
+            flags &= EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error;
+            EPollInterop.EPollControl(tsocket.ThreadContext.EPollFd,
+                        registered ? EPollOperation.Modify : EPollOperation.Add,
+                        tsocket.Fd,
+                        flags | EPollEvents.OneShot,
+                        EPollData(tsocket.Fd));
         }
 
         private void ThrowInvalidState()
