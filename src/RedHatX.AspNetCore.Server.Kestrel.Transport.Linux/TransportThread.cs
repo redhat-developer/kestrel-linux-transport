@@ -3,7 +3,6 @@ using System.Buffers;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.Sequences;
 using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
@@ -22,7 +21,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         // 128 IOVectors, take up 2KB of stack, can receive up to 512KB
         private const int MaxIOVectorReceiveLength = 128;
         private const int ListenBacklog     = 128;
-        private const int EventBufferLength = 512;
+        internal const int EventBufferLength = 512;
         private const int EPollBlocked      = 1;
         private const int EPollNotBlocked   = 0;
         private const byte PipeStopThread     = 0;
@@ -33,7 +32,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private static readonly int MaxSendLength;
         static TransportThread()
         {
-            using (var memoryPool = new MemoryPool())
+            using (var memoryPool = KestrelMemoryPool.Create())
             {
                 MaxPooledBlockLength = memoryPool.MaxBufferSize;
                 MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
@@ -108,6 +107,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     _state = State.Starting;
 
                     _thread = new Thread(PollThread);
+                    _thread.IsBackground = true;
                     _thread.Start();
                 }
                 catch
@@ -383,6 +383,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 int statZeroCopyCopied = 0;
                 var sockets = threadContext.Sockets;
                 bool checkAvailable = _transportOptions.CheckAvailable;
+                bool aioReceive = _transportOptions.AioReceive;
 
                 var acceptableSockets = new List<TSocket>(1);
                 var readableSockets = new List<TSocket>(EventBufferLength);
@@ -525,14 +526,21 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                     // handle reads
                     statReadEvents += readableSockets.Count;
-                    for (int i = 0; i < readableSockets.Count; i++)
+                    if (!aioReceive)
                     {
-                        TSocket socket = readableSockets[i];
-                        int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
-                        var receiveResult = socket.Receive(availableBytes);
-                        socket.OnReceiveFromSocket(receiveResult);
+                        for (int i = 0; i < readableSockets.Count; i++)
+                        {
+                            TSocket socket = readableSockets[i];
+                            int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
+                            var receiveResult = socket.Receive(availableBytes);
+                            socket.OnReceiveFromSocket(receiveResult);
+                        }
+                        readableSockets.Clear();
                     }
-                    readableSockets.Clear();
+                    else if (readableSockets.Count > 0)
+                    {
+                        AioReceive(readableSockets);
+                    }
 
                     // reregister for events
                     for (int i = 0; i < reregisterEventSockets.Count; i++)
@@ -585,6 +593,63 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 threadContext?.Dispose();
 
                 CompleteStateChange(State.Stopped);
+            }
+        }
+
+        private unsafe void AioReceive(List<TSocket> readableSockets)
+        {
+            AioEvent* aioEvents = _threadContext.AioEvents;
+            AioCb* aioCbs = _threadContext.AioCbs;
+            AioCb** aioCbsTable = _threadContext.AioCbsTable;
+            IntPtr ctxp = _threadContext.AioContext;
+            for (int i = 0; i < readableSockets.Count; i++)
+            {
+                TSocket socket = readableSockets[i];
+                aioCbs[i].Fd = socket.Fd;
+                aioCbs[i].Data = i;
+                aioCbs[i].OpCode = AioOpCode.PRead;
+                PipeWriter writer = socket.Input;
+                Memory<byte> memory = writer.GetMemory(2048);
+                var bufferHandle = memory.Retain(pin: true);
+                aioCbs[i].Buffer = bufferHandle.Pointer;
+                aioCbs[i].Length = memory.Length;
+                // It's ok to unpin the handle here because the memory is from the pool
+                // we created, which is already pinned.
+                bufferHandle.Dispose();
+            }
+            PosixResult res = AioInterop.IoSubmit(ctxp, readableSockets.Count, aioCbsTable);
+            if (res != readableSockets.Count)
+            {
+                throw new NotSupportedException("Unexpected IoSubmit retval " + res);
+            }
+            AioInterop.IoGetEvents(ctxp, readableSockets.Count, readableSockets.Count, aioEvents, -1);
+            if (res != readableSockets.Count)
+            {
+                throw new NotSupportedException("Unexpected IoGetEvents retval " + res);
+            }
+            for (int i = 0; i < readableSockets.Count; i++)
+            {
+                TSocket socket = readableSockets[(int)aioEvents[i].Data];
+                PosixResult result = aioEvents[i].Result;
+                Exception receiveResult;
+                if (result.Value == 0)
+                {
+                    receiveResult = EofSentinel;
+                }
+                else if (result.Value > 0)
+                {
+                    receiveResult = null;
+                    socket.Input.Advance(result.Value);
+                }
+                else if (result == PosixResult.EAGAIN)
+                {
+                    receiveResult = EAgainSentinel;
+                }
+                else
+                {
+                    receiveResult = result.AsException();
+                }
+                socket.OnReceiveFromSocket(receiveResult);
             }
         }
 
@@ -749,9 +814,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static long EPollData(int fd) => (((long)(uint)fd) << 32) | (long)(uint)fd;
 
-        internal static MemoryPool CreateMemoryPool()
+        internal static MemoryPool<byte> CreateMemoryPool()
         {
-            return new MemoryPool();
+            return KestrelMemoryPool.Create();
         }
     }
 }

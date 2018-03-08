@@ -111,7 +111,7 @@ namespace Tests
         private const long _maxRequestBufferSize = 1024 * 1024;
         private const long _maxResponseBufferSize = 64 * 1024;
 
-        private PipeOptions GetInputPipeOptions(MemoryPool memoryPool, PipeScheduler writerScheduler) => new PipeOptions
+        private PipeOptions GetInputPipeOptions(MemoryPool<byte> memoryPool, PipeScheduler writerScheduler) => new PipeOptions
         (
             pool: memoryPool,
             readerScheduler: PipeScheduler.Inline,
@@ -120,7 +120,7 @@ namespace Tests
             resumeWriterThreshold: _maxRequestBufferSize
         );
 
-        private PipeOptions GetOutputPipeOptions(MemoryPool memoryPool, PipeScheduler readerScheduler) => new PipeOptions
+        private PipeOptions GetOutputPipeOptions(MemoryPool<byte> memoryPool, PipeScheduler readerScheduler) => new PipeOptions
         (
             pool: memoryPool,
             readerScheduler: readerScheduler,

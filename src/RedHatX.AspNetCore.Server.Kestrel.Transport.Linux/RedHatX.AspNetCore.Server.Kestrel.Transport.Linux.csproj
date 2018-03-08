@@ -1,5 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
+  <Import Project="../../dependencies.props" />
   <PropertyGroup>
     <VersionPrefix>2.1.0</VersionPrefix>
     <TargetFramework>netstandard2.0</TargetFramework>
@@ -16,10 +16,10 @@
   </Target>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions" Version="2.1.0-*" />
-    <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="2.1.0-*" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="2.1.0-*" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="2.1.0-*" />
+    <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions" Version="$(AspNetCoreVersion)" />
+    <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="$(AspNetCoreVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(AspNetCoreVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="$(AspNetCoreVersion)" />
   </ItemGroup>
 
 </Project>

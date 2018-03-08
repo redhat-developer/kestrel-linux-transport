@@ -61,6 +61,8 @@ namespace SampleApp
                 Console.WriteLine("\tnoda     No deferred accept");
                 Console.WriteLine("\tnods     No deferred send");
                 Console.WriteLine("\tnoca     Read single buffer");
+                Console.WriteLine("\taior     Receive using Linux aio");
+                Console.WriteLine("\taios     Send using Linux aio");
                 return;
             }
 
@@ -76,6 +78,8 @@ namespace SampleApp
             bool da = !args.Contains("noda");
             bool tt = !args.Contains("nott");
             bool ca = !args.Contains("noca");
+            bool aior = args.Contains("aior");
+            bool aios = args.Contains("aios");
             _log = args.Contains("log");
             int threadCount = 0;
             int zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
@@ -141,6 +145,8 @@ namespace SampleApp
                     options.ZeroCopyThreshold = zeroCopyThreshold;
                     options.ZeroCopy = true;
                     options.CheckAvailable = ca;
+                    options.AioReceive = aior;
+                    options.AioSend = aios;
                     //options.CpuSet = cpuSet;
                 });
             }

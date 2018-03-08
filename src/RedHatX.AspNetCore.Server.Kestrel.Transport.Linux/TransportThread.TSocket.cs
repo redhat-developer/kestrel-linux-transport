@@ -5,9 +5,9 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Protocols;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
-using SequencePosition = System.Collections.SequencePosition;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -47,8 +47,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private int _flags;
             private Exception   _outputCompleteError;
             private Exception _inputCompleteError;
-            private ValueAwaiter<ReadResult> _readAwaiter;
-            private ValueAwaiter<FlushResult> _flushAwaiter;
+            private PipeAwaiter<ReadResult> _readAwaiter;
+            private PipeAwaiter<FlushResult> _flushAwaiter;
             private int _zeropCopyState;
             private SequencePosition _zeroCopyEnd;
             private readonly Action _onFlushedToApp;
@@ -173,11 +173,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 try
                 {
                     var readResult = _readAwaiter.GetResult();
-                    ReadOnlyBuffer<byte> buffer = readResult.Buffer;
+                    ReadOnlySequence<byte> buffer = readResult.Buffer;
                     SequencePosition end = buffer.Start;
                     bool zerocopy = false;
                     bool zeroCopyRegistered = false;
-                    if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
+                    if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCanceled)
                     {
                         // EOF or TransportThread stopped
                         stop = true;
@@ -530,14 +530,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     FlushResult flushResult = _flushAwaiter.GetResult();
                     if (flushResult.IsCompleted || // Reader has stopped
-                        flushResult.IsCancelled)   // TransportThread has stopped
+                        flushResult.IsCanceled)   // TransportThread has stopped
                     {
                         error = new ConnectionAbortedException();
                     }
                 }
                 catch (Exception e)
                 {
-                    Input.Commit();
                     error = e;
                 }
                 if (error == null)
@@ -557,7 +556,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 CleanupSocketEnd();
             }
 
-            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, ref ReadOnlyBuffer<byte> buffer)
+            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, ref ReadOnlySequence<byte> buffer)
             {
                 bool zeroCopyRegistered = false;
                 int ioVectorLength = 0;
@@ -646,7 +645,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 StopWriteToSocket();
             }
 
-            public override MemoryPool MemoryPool => ThreadContext.MemoryPool;
+            public override MemoryPool<byte> MemoryPool => ThreadContext.MemoryPool;
 
             public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
 

@@ -19,6 +19,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public bool CheckAvailable { get; set; } = true;
 
+        public bool AioReceive { get; set; } = false;
+
+        public bool AioSend { get; set; } = false;
+
         internal CpuSet CpuSet { get; set; }
 
         public int ThreadCount

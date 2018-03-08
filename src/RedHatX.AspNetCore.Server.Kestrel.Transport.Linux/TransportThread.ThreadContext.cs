@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipelines;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
@@ -14,7 +15,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     {
         sealed class ThreadContext : PipeScheduler
         {
-            public ThreadContext(TransportThread transportThread, LinuxTransportOptions transportOptions, IConnectionHandler connectionHandler, ILogger logger)
+            private const int MemoryAlignment = 8;
+
+            public unsafe ThreadContext(TransportThread transportThread, LinuxTransportOptions transportOptions, IConnectionHandler connectionHandler, ILogger logger)
             {
                 TransportThread = transportThread;
                 ConnectionHandler = connectionHandler;
@@ -26,6 +29,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
                 _epollState = EPollBlocked;
                 SendScheduler = transportOptions.DeferSend ? this as PipeScheduler : PipeScheduler.Inline;
+                if (transportOptions.AioReceive | transportOptions.AioSend)
+                {
+                    _aioEventsMemory = AllocMemory(sizeof(AioEvent) * TransportThread.EventBufferLength);
+                    _aioCbsMemory = AllocMemory(sizeof(AioCb) * TransportThread.EventBufferLength);
+                    _aioCbsTableMemory = AllocMemory(sizeof(AioCb*) * TransportThread.EventBufferLength);
+                    for (int i = 0; i < TransportThread.EventBufferLength; i++)
+                    {
+                        AioCbsTable[i] = &AioCbs[i];
+                    }
+                }
+            }
+
+            private unsafe IntPtr AllocMemory(int length)
+            {
+                IntPtr res = Marshal.AllocHGlobal(length + MemoryAlignment - 1);
+                Span<byte> span = new Span<byte>(Align(res), length);
+                span.Clear();
+                return res;
             }
 
             public void Initialize()
@@ -35,6 +56,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 EPollFd = EPoll.DangerousGetHandle().ToInt32();
                 MemoryPool = TransportThread.CreateMemoryPool();
                 PipeEnds = PipeEnd.CreatePair(blocking: false);
+                if (_aioEventsMemory != IntPtr.Zero)
+                {
+                    AioInterop.IoSetup(EventBufferLength, out AioContext).ThrowOnError();
+                }
             }
 
             public int EPollFd;
@@ -46,7 +71,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly TransportThread TransportThread;
             // key is the file descriptor
             public readonly Dictionary<int, TSocket> Sockets;
-            public MemoryPool MemoryPool;
+            public MemoryPool<byte> MemoryPool;
             public readonly List<TSocket> AcceptSockets;
 
             private EPoll EPoll;
@@ -54,6 +79,22 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly object _schedulerGate = new object();
             private Queue<ScheduledAction> _schedulerAdding;
             private Queue<ScheduledAction> _schedulerRunning;
+
+            private IntPtr _aioEventsMemory;
+            public unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
+            private IntPtr _aioCbsMemory;
+            public unsafe AioCb* AioCbs => (AioCb*)Align(_aioCbsMemory);
+            private IntPtr _aioCbsTableMemory;
+            public unsafe AioCb** AioCbsTable => (AioCb**)Align(_aioCbsTableMemory);
+            public IntPtr AioContext;
+
+            private unsafe void* Align(IntPtr p)
+            {
+                ulong pointer = (ulong)p;
+                pointer += MemoryAlignment - 1;
+                pointer &= ~(ulong)(MemoryAlignment - 1);
+                return (void*)pointer;
+            }
 
             public void SetEpollNotBlocked()
             {
@@ -144,6 +185,26 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 EPoll?.Dispose();
                 PipeEnds.Dispose();
                 MemoryPool?.Dispose();
+                if (_aioEventsMemory != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(_aioEventsMemory);
+                    _aioEventsMemory = IntPtr.Zero;
+                }
+                if (_aioCbsMemory != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(_aioCbsMemory);
+                    _aioCbsMemory = IntPtr.Zero;
+                }
+                if (_aioCbsTableMemory != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(_aioCbsTableMemory);
+                    _aioCbsTableMemory = IntPtr.Zero;
+                }
+                if (AioContext != IntPtr.Zero)
+                {
+                    AioInterop.IoDestroy(AioContext);
+                    AioContext = IntPtr.Zero;
+                }
             }
 
             public void RemoveSocket(int tsocketKey)
