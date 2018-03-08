@@ -380,14 +380,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Socket.Dispose();
             }
 
-            public unsafe Exception Receive(int availableBytes = 0)
+            public static unsafe int FillReceiveIOVector(PipeWriter writer, int availableBytes, IOVector* ioVectors, ref int ioVectorLength)
             {
-                PipeWriter writer = Input;
                 Memory<byte> memory = writer.GetMemory(2048);
-
-                int ioVectorLength = availableBytes <= memory.Length ? 1 :
-                        Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
-                var ioVectors = stackalloc IOVector[ioVectorLength];
                 var allocated = 0;
 
                 var advanced = 0;
@@ -414,7 +409,23 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     advanced += length;
                     memory = writer.GetMemory(1);
                 }
-                var expectedMin = Math.Min(availableBytes, allocated);
+                ioVectorLength = ioVectorsUsed;
+                return advanced;
+            }
+
+            public static int CalcIoVectorLength(PipeWriter writer, int availableBytes)
+            {
+                Memory<byte> memory = writer.GetMemory(2048);
+                return availableBytes <= memory.Length ? 1 :
+                       Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
+            }
+
+            public unsafe Exception Receive(int availableBytes = 0)
+            {
+                PipeWriter writer = Input;
+                int ioVectorLength = CalcIoVectorLength(writer, availableBytes);
+                var ioVectors = stackalloc IOVector[ioVectorLength];
+                int advanced = FillReceiveIOVector(writer, availableBytes, ioVectors, ref ioVectorLength);
 
                 // Ideally we get availableBytes in a single receive
                 // but we are happy if we get at least a part of it
@@ -428,31 +439,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var received = 0;
                 do
                 {
-                    var result = SocketInterop.Receive(Fd, ioVectors, ioVectorsUsed);
-                    if (result.IsSuccess)
+                    var result = SocketInterop.Receive(Fd, ioVectors, ioVectorLength);
+                    (bool done, Exception retval) = InterpretReceiveResult(writer, result, ref received, advanced, ioVectors, ioVectorLength);
+                    if (done)
                     {
-                        received += result.Value;
-                        if (received >= expectedMin)
-                        {
-                            // We made it!
-                            writer.Advance(received - advanced);
-                            return received == 0 ? EofSentinel : null;
-                        }
-                        eAgainCount = 0;
-                        // Update ioVectors to match bytes read
-                        var skip = result.Value;
-                        for (int i = 0; (i < ioVectorsUsed) && (skip > 0); i++)
-                        {
-                            var length = (int)ioVectors[i].Count;
-                            var skipped = Math.Min(skip, length);
-                            ioVectors[i].Count = (void*)(length - skipped);
-                            ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
-                            skip -= skipped;
-                        }
+                        return retval;
                     }
-                    else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                    else if (retval == EAgainSentinel)
                     {
-                        if (expectedMin == 0)
+                        if (availableBytes == 0)
                         {
                             return EAgainSentinel;
                         }
@@ -462,15 +457,48 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
                         }
                     }
+                    else
+                    {
+                        eAgainCount = 0;
+                    }
+                } while (true);
+            }
+
+            private static unsafe (bool done, Exception receiveResult) InterpretReceiveResult(PipeWriter writer, PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
+            {
+                    if (result.IsSuccess)
+                    {
+                        received += result.Value;
+                        if (received >= advanced)
+                        {
+                            // We made it!
+                            writer.Advance(received - advanced);
+                            return (true, received == 0 ? EofSentinel : null);
+                        }
+                        // Update ioVectors to match bytes read
+                        var skip = result.Value;
+                        for (int i = 0; (i < ioVectorLength) && (skip > 0); i++)
+                        {
+                            var length = (int)ioVectors[i].Count;
+                            var skipped = Math.Min(skip, length);
+                            ioVectors[i].Count = (void*)(length - skipped);
+                            ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
+                            skip -= skipped;
+                        }
+                        return (false, null);
+                    }
+                    else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                    {
+                        return (false, EAgainSentinel);
+                    }
                     else if (result == PosixResult.ECONNRESET)
                     {
-                        return new ConnectionResetException(result.ErrorDescription(), result.AsException());
+                        return (true, new ConnectionResetException(result.ErrorDescription(), result.AsException()));
                     }
                     else
                     {
-                        return result.AsException();
+                        return (true, result.AsException());
                     }
-                } while (true);
             }
 
             private void ReceiveFromSocket()
