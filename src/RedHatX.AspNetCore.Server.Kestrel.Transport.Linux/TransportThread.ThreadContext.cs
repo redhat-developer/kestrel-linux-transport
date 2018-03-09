@@ -27,8 +27,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 AcceptSockets = new List<TSocket>();
                 _schedulerAdding = new Queue<ScheduledAction>(1024);
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
+                _scheduledSendAdding = new Queue<ScheduledSend>(1024);
+                _scheduledSendRunning = new Queue<ScheduledSend>(1024);
                 _epollState = EPollBlocked;
-                SendScheduler = transportOptions.DeferSend ? this as PipeScheduler : PipeScheduler.Inline;
                 if (transportOptions.AioReceive | transportOptions.AioSend)
                 {
                     _aioEventsMemory = AllocMemory(sizeof(AioEvent) * TransportThread.EventBufferLength);
@@ -68,7 +69,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly ILogger Logger;
             public readonly IConnectionHandler ConnectionHandler;
             public PipeEndPair PipeEnds;
-            public readonly PipeScheduler SendScheduler;
 
             public readonly TransportThread TransportThread;
             // key is the file descriptor
@@ -81,6 +81,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly object _schedulerGate = new object();
             private Queue<ScheduledAction> _schedulerAdding;
             private Queue<ScheduledAction> _schedulerRunning;
+            private Queue<ScheduledSend> _scheduledSendAdding;
+            private Queue<ScheduledSend> _scheduledSendRunning;
 
             private IntPtr _aioEventsMemory;
             public unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
@@ -108,6 +110,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public override void Schedule<TState>(Action<TState> action, TState state)
             {
+                // TODO: remove this function
                 int epollState;
                 lock (_schedulerGate)
                 {
@@ -120,31 +123,48 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            public void ScheduleSend(TSocket socket)
+            {
+                int epollState;
+                lock (_schedulerGate)
+                {
+                    epollState = Interlocked.CompareExchange(ref _epollState, EPollNotBlocked, EPollBlocked);
+                    _scheduledSendAdding.Enqueue(new ScheduledSend { Socket = socket });
+                }
+                if (epollState == EPollBlocked)
+                {
+                    PipeEnds.WriteEnd.WriteByte(PipeActionsPending);
+                }
+            }
+
             public void DoScheduledWork()
             {
-                var loopsRemaining = 1; // actions may lead to more actions
-                bool queueNotEmpty; 
-                do
+                Queue<ScheduledAction> queue;
+                Queue<ScheduledSend> sendQueue;
+                lock (_schedulerGate)
                 {
-                    Queue<ScheduledAction> queue;
-                    lock (_schedulerGate)
-                    {
-                        queue = _schedulerAdding;
-                        _schedulerAdding = _schedulerRunning;
-                        _schedulerRunning = queue;
-                    }
-                    queueNotEmpty = queue.Count != 0;
-                    while (queue.Count != 0)
-                    {
-                        var scheduledAction = queue.Dequeue();
-                        scheduledAction.CallbackAdapter(scheduledAction.Callback, scheduledAction.State);
-                    }
-                } while (queueNotEmpty && --loopsRemaining > 0);
+                    queue = _schedulerAdding;
+                    _schedulerAdding = _schedulerRunning;
+                    _schedulerRunning = queue;
+
+                    sendQueue = _scheduledSendAdding;
+                    _scheduledSendAdding = _scheduledSendRunning;
+                    _scheduledSendRunning = sendQueue;
+                }
+                if (sendQueue.Count > 0)
+                {
+                    TransportThread.PerformSends(sendQueue);
+                }
+                while (queue.Count != 0)
+                {
+                    var scheduledAction = queue.Dequeue();
+                    scheduledAction.CallbackAdapter(scheduledAction.Callback, scheduledAction.State);
+                }
 
                 bool unblockEPoll = false;
                 lock (_schedulerGate)
                 {
-                    if (_schedulerAdding.Count > 0)
+                    if (_schedulerAdding.Count > 0 || _scheduledSendAdding.Count > 0)
                     {
                         unblockEPoll = true;
                     }

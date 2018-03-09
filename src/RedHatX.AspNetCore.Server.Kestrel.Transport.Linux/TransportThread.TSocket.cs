@@ -34,7 +34,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             DeferAccept     = 0x400,
             WriteStopped    = 0x1000,
-            ReadStopped     = 0x2000
+            ReadStopped     = 0x2000,
+
+            DeferSend       = 0x4000
         }
 
         class TSocket : TransportConnection
@@ -143,15 +145,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 ReadFromApp();
             }
 
+            private bool DeferSend => (_flags & (int)SocketFlags.DeferSend) != 0;
+
             private void ReadFromApp()
             {
-                bool loop = true;
+                bool loop = !DeferSend;
                 do
                 {
                     _readAwaiter = Output.ReadAsync().GetAwaiter();
                     if (_readAwaiter.IsCompleted)
                     {
-                        loop = OnReadFromApp(loop);
+                        if (DeferSend)
+                        {
+                            ThreadContext.ScheduleSend(this);
+                        }
+                        else
+                        {
+                            loop = OnReadFromApp(loop);
+                        }
                     }
                     else
                     {
@@ -162,6 +173,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             private void OnReadFromApp()
+            {
+                if (DeferSend)
+                {
+                    ThreadContext.ScheduleSend(this);
+                }
+                else
+                {
+                    OnReadFromApp(loop: false);
+                }
+            }
+
+            public void DoDeferedSend()
             {
                 OnReadFromApp(loop: false);
             }
@@ -678,7 +701,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
 
-            public override PipeScheduler OutputReaderScheduler => ThreadContext.SendScheduler;
+            public override PipeScheduler OutputReaderScheduler => PipeScheduler.Inline;
         }
     }
 }

@@ -52,6 +52,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public Object State;
         }
 
+        private struct ScheduledSend
+        {
+            public TSocket Socket;
+        }
+
         enum State
         {
             Initial,
@@ -372,6 +377,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         flags = SocketFlags.TypeAccept;
                         acceptSocket = CreateAcceptSocket(_endPoint, _transportOptions, _cpuId, threadContext, ref flags, out zeroCopyThreshold);
+                    }
+                    if (_transportOptions.DeferSend)
+                    {
+                        flags |= SocketFlags.DeferSend;
                     }
                     // accept connections
                     AcceptOn(acceptSocket, flags, zeroCopyThreshold, threadContext);
@@ -772,7 +781,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         ipSocket = false;
                     }
 
-                    tsocket = new TSocket(threadContext, SocketFlags.TypeClient)
+                    tsocket = new TSocket(threadContext, SocketFlags.TypeClient | (tacceptSocket.Flags & SocketFlags.DeferSend))
                     {
                         Fd = fd,
                         Socket = clientSocket,
@@ -885,6 +894,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         internal static MemoryPool<byte> CreateMemoryPool()
         {
             return KestrelMemoryPool.Create();
+        }
+
+        private void PerformSends(Queue<ScheduledSend> sendQueue)
+        {
+            while (sendQueue.Count > 0)
+            {
+                ScheduledSend scheduledSend = sendQueue.Dequeue();
+                scheduledSend.Socket.DoDeferedSend();
+            }
         }
     }
 }
