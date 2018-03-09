@@ -41,7 +41,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private uint        _flags;
         private uint        _resFd;
 
-        public unsafe void*  Buffer { set { _buf = (ulong)value; } }
+        public unsafe void*  Buffer { set { _buf = (ulong)value; } get { return (void*)_buf; } }
         public int           Length { set { _nBytes = (ulong)value; } }
     }
 

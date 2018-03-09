@@ -614,6 +614,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public int IoVectorLength;
         }
 
+        internal const int MaxEAgainCount = 10;
+
         private unsafe void AioReceive(List<TSocket> readableSockets)
         {
             int readableSocketCount = readableSockets.Count;
@@ -622,7 +624,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             AioCb** aioCbsTable = _threadContext.AioCbsTable;
             IOVector* ioVectorTable = _threadContext.IoVectorTable;
             IntPtr ctxp = _threadContext.AioContext;
-            AioReceiveState* receiveState = stackalloc AioReceiveState[readableSocketCount];
+            AioReceiveState* receiveStates = stackalloc AioReceiveState[readableSocketCount];
             IOVector* ioVectors = ioVectorTable;
             for (int i = 0; i < readableSocketCount; i++)
             {
@@ -631,7 +633,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 int availableBytes = 0;
                 int ioVectorLength = socket.CalcIoVectorLength(availableBytes, IoVectorsPerAioSocket);
                 int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
-                receiveState[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength};
+                receiveStates[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength};
 
                 aioCbs[i].Fd = socket.Fd;
                 aioCbs[i].Data = i;
@@ -641,41 +643,71 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                 ioVectors += ioVectorLength;
             }
-            PosixResult res = AioInterop.IoSubmit(ctxp, readableSocketCount, aioCbsTable);
-            if (res != readableSocketCount)
+            int eAgainCount = 0;
+            while (readableSocketCount > 0)
             {
-                throw new NotSupportedException("Unexpected IoSubmit retval " + res);
-            }
-            AioInterop.IoGetEvents(ctxp, readableSocketCount, readableSocketCount, aioEvents, -1);
-            if (res != readableSocketCount)
-            {
-                throw new NotSupportedException("Unexpected IoGetEvents retval " + res);
-            }
-            // TODO: handle received < advanced
-            // TODO: handle EAGAIN
-            for (int i = 0; i < readableSocketCount; i++)
-            {
-                TSocket socket = readableSockets[(int)aioEvents[i].Data];
-                PosixResult result = aioEvents[i].Result;
-                Exception receiveResult;
-                if (result.Value == 0)
+                PosixResult res = AioInterop.IoSubmit(ctxp, readableSocketCount, aioCbsTable);
+                if (res != readableSocketCount)
                 {
-                    receiveResult = EofSentinel;
+                    throw new NotSupportedException("Unexpected IoSubmit retval " + res);
                 }
-                else if (result.Value > 0)
+                AioInterop.IoGetEvents(ctxp, readableSocketCount, readableSocketCount, aioEvents, -1);
+                if (res != readableSocketCount)
                 {
-                    receiveResult = null;
-                    socket.Input.Advance(result.Value);
+                    throw new NotSupportedException("Unexpected IoGetEvents retval " + res);
                 }
-                else if (result == PosixResult.EAGAIN)
+                int socketsRemaining = readableSocketCount;
+                bool allEAgain = true;
+                for (int i = 0; i < readableSocketCount; i++)
                 {
-                    receiveResult = EAgainSentinel;
+                    AioEvent* aioEvent = &aioEvents[i];
+                    PosixResult result = aioEvent->Result;
+                    int socketIndex = (int)aioEvent->Data;
+                    TSocket socket = readableSockets[socketIndex];
+                    ref AioReceiveState receiveState = ref receiveStates[socketIndex];
+                    (bool done, Exception retval) = socket.InterpretReceiveResult(result, ref receiveState.Received, receiveState.Advanced, (IOVector*)aioEvent->AioCb->Buffer, receiveState.IoVectorLength);
+                    if (done || (retval == EAgainSentinel && receiveState.Advanced == 0))
+                    {
+                        // TODO: move this after this loop?
+                        socket.OnReceiveFromSocket(retval);
+                        socketsRemaining--;
+                        aioEvent->AioCb->OpCode = AioOpCode.Noop;
+                        allEAgain = false;
+                    }
+                    else if (retval != EAgainSentinel)
+                    {
+                        allEAgain = false;
+                    }
                 }
-                else
+                if (socketsRemaining > 0)
                 {
-                    receiveResult = result.AsException();
+                    if (allEAgain)
+                    {
+                        eAgainCount++;
+                        if (eAgainCount == MaxEAgainCount)
+                        {
+                            throw new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
+                        }
+                    }
+                    else
+                    {
+                        int writeAt = 0;
+                        // The kernel doesn't handle Noop, we need to remove them from the aioCbs
+                        for (int i = 0; i < readableSocketCount; i++)
+                        {
+                            if (aioCbs[i].OpCode != AioOpCode.Noop)
+                            {
+                                if (writeAt != i)
+                                {
+                                    aioCbs[writeAt] = aioCbs[i];
+                                }
+                                writeAt++;
+                            }
+                        }
+                        readableSocketCount = socketsRemaining;
+                        eAgainCount = 0;
+                    }
                 }
-                socket.OnReceiveFromSocket(receiveResult);
             }
             readableSockets.Clear();
         }

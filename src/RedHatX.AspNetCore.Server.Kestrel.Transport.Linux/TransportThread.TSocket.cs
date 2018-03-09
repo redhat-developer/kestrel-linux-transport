@@ -435,13 +435,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // * TCP URG
                 // * packet was not placed in receive queue (race with FIONREAD)
                 // * ?
-                const int MaxEAgainCount = 10;
                 var eAgainCount = 0;
                 var received = 0;
                 do
                 {
                     var result = SocketInterop.Receive(Fd, ioVectors, ioVectorLength);
-                    (bool done, Exception retval) = InterpretReceiveResult(writer, result, ref received, advanced, ioVectors, ioVectorLength);
+                    (bool done, Exception retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, ioVectorLength);
                     if (done)
                     {
                         return retval;
@@ -453,7 +452,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             return EAgainSentinel;
                         }
                         eAgainCount++;
-                        if (eAgainCount == MaxEAgainCount)
+                        if (eAgainCount == TransportThread.MaxEAgainCount)
                         {
                             return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
                         }
@@ -465,41 +464,42 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 } while (true);
             }
 
-            private static unsafe (bool done, Exception receiveResult) InterpretReceiveResult(PipeWriter writer, PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
+            public unsafe (bool done, Exception receiveResult) InterpretReceiveResult(PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
             {
-                    if (result.IsSuccess)
+                PipeWriter writer = Input;
+                if (result.IsSuccess)
+                {
+                    received += result.Value;
+                    if (received >= advanced)
                     {
-                        received += result.Value;
-                        if (received >= advanced)
-                        {
-                            // We made it!
-                            writer.Advance(received - advanced);
-                            return (true, received == 0 ? EofSentinel : null);
-                        }
-                        // Update ioVectors to match bytes read
-                        var skip = result.Value;
-                        for (int i = 0; (i < ioVectorLength) && (skip > 0); i++)
-                        {
-                            var length = (int)ioVectors[i].Count;
-                            var skipped = Math.Min(skip, length);
-                            ioVectors[i].Count = (void*)(length - skipped);
-                            ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
-                            skip -= skipped;
-                        }
-                        return (false, null);
+                        // We made it!
+                        writer.Advance(received - advanced);
+                        return (true, received == 0 ? EofSentinel : null);
                     }
-                    else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                    // Update ioVectors to match bytes read
+                    var skip = result.Value;
+                    for (int i = 0; (i < ioVectorLength) && (skip > 0); i++)
                     {
-                        return (false, EAgainSentinel);
+                        var length = (int)ioVectors[i].Count;
+                        var skipped = Math.Min(skip, length);
+                        ioVectors[i].Count = (void*)(length - skipped);
+                        ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
+                        skip -= skipped;
                     }
-                    else if (result == PosixResult.ECONNRESET)
-                    {
-                        return (true, new ConnectionResetException(result.ErrorDescription(), result.AsException()));
-                    }
-                    else
-                    {
-                        return (true, result.AsException());
-                    }
+                    return (false, null);
+                }
+                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                {
+                    return (false, EAgainSentinel);
+                }
+                else if (result == PosixResult.ECONNRESET)
+                {
+                    return (true, new ConnectionResetException(result.ErrorDescription(), result.AsException()));
+                }
+                else
+                {
+                    return (true, result.AsException());
+                }
             }
 
             private void ReceiveFromSocket()
