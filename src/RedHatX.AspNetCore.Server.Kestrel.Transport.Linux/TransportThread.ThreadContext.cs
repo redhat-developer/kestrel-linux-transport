@@ -39,6 +39,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         AioCbsTable[i] = &AioCbs[i];
                     }
+                    AioResults = new Exception[TransportThread.EventBufferLength];
                 }
             }
 
@@ -90,6 +91,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private IntPtr _ioVectorTableMemory;
             public unsafe IOVector* IoVectorTable => (IOVector*)Align(_ioVectorTableMemory);
             public IntPtr AioContext;
+            public Exception[] AioResults;
 
             private unsafe void* Align(IntPtr p)
             {

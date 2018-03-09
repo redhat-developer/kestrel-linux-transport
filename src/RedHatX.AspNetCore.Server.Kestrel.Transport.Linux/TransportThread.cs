@@ -626,9 +626,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             IntPtr ctxp = _threadContext.AioContext;
             AioReceiveState* receiveStates = stackalloc AioReceiveState[readableSocketCount];
             IOVector* ioVectors = ioVectorTable;
+            Exception[] receiveResults = _threadContext.AioResults;
             for (int i = 0; i < readableSocketCount; i++)
             {
-                // TODO: optimize for ioVectorLength = 1
                 TSocket socket = readableSockets[i];
                 int availableBytes = 0;
                 int ioVectorLength = socket.CalcIoVectorLength(availableBytes, IoVectorsPerAioSocket);
@@ -668,8 +668,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     (bool done, Exception retval) = socket.InterpretReceiveResult(result, ref receiveState.Received, receiveState.Advanced, (IOVector*)aioEvent->AioCb->Buffer, receiveState.IoVectorLength);
                     if (done || (retval == EAgainSentinel && receiveState.Advanced == 0))
                     {
-                        // TODO: move this after this loop?
-                        socket.OnReceiveFromSocket(retval);
+                        receiveResults[socketIndex] = retval;
                         socketsRemaining--;
                         aioEvent->AioCb->OpCode = AioOpCode.Noop;
                         allEAgain = false;
@@ -708,6 +707,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         eAgainCount = 0;
                     }
                 }
+                else
+                {
+                    readableSocketCount = 0;
+                }
+            }
+            for (int i = 0; i < readableSockets.Count; i++)
+            {
+                Exception receiveResult = receiveResults[i];
+                receiveResults[i] = null;
+                readableSockets[i].OnReceiveFromSocket(receiveResult);
             }
             readableSockets.Clear();
         }
