@@ -39,9 +39,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        private class CallbackAdapter<T>
+        {
+            public static readonly Action<object, object> PostCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
+            public static readonly Action<object, object> PostAsyncCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
+        }
+
         private struct ScheduledAction
         {
-            public Action<object> Action;
+            public Action<object, object> CallbackAdapter;
+            public object Callback;
             public Object State;
         }
 
@@ -583,6 +590,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             catch (Exception ex)
             {
+                Console.WriteLine(ex.Message);
+                Console.WriteLine(ex.StackTrace);
                 Environment.FailFast("TransportThread", ex);
             }
             finally
@@ -596,38 +605,55 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        internal const int IoVectorsPerAioSocket = 32;
+
+        struct AioReceiveState
+        {
+            public int Received;
+            public int Advanced;
+            public int IoVectorLength;
+        }
+
         private unsafe void AioReceive(List<TSocket> readableSockets)
         {
+            int readableSocketCount = readableSockets.Count;
             AioEvent* aioEvents = _threadContext.AioEvents;
             AioCb* aioCbs = _threadContext.AioCbs;
             AioCb** aioCbsTable = _threadContext.AioCbsTable;
+            IOVector* ioVectorTable = _threadContext.IoVectorTable;
             IntPtr ctxp = _threadContext.AioContext;
-            for (int i = 0; i < readableSockets.Count; i++)
+            AioReceiveState* receiveState = stackalloc AioReceiveState[readableSocketCount];
+            IOVector* ioVectors = ioVectorTable;
+            for (int i = 0; i < readableSocketCount; i++)
             {
+                // TODO: optimize for ioVectorLength = 1
                 TSocket socket = readableSockets[i];
+                int availableBytes = 0;
+                int ioVectorLength = socket.CalcIoVectorLength(availableBytes, IoVectorsPerAioSocket);
+                int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
+                receiveState[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength};
+
                 aioCbs[i].Fd = socket.Fd;
                 aioCbs[i].Data = i;
-                aioCbs[i].OpCode = AioOpCode.PRead;
-                PipeWriter writer = socket.Input;
-                Memory<byte> memory = writer.GetMemory(2048);
-                var bufferHandle = memory.Retain(pin: true);
-                aioCbs[i].Buffer = bufferHandle.Pointer;
-                aioCbs[i].Length = memory.Length;
-                // It's ok to unpin the handle here because the memory is from the pool
-                // we created, which is already pinned.
-                bufferHandle.Dispose();
+                aioCbs[i].OpCode = AioOpCode.PReadv;
+                aioCbs[i].Buffer = ioVectors;
+                aioCbs[i].Length = ioVectorLength;
+
+                ioVectors += ioVectorLength;
             }
-            PosixResult res = AioInterop.IoSubmit(ctxp, readableSockets.Count, aioCbsTable);
-            if (res != readableSockets.Count)
+            PosixResult res = AioInterop.IoSubmit(ctxp, readableSocketCount, aioCbsTable);
+            if (res != readableSocketCount)
             {
                 throw new NotSupportedException("Unexpected IoSubmit retval " + res);
             }
-            AioInterop.IoGetEvents(ctxp, readableSockets.Count, readableSockets.Count, aioEvents, -1);
-            if (res != readableSockets.Count)
+            AioInterop.IoGetEvents(ctxp, readableSocketCount, readableSocketCount, aioEvents, -1);
+            if (res != readableSocketCount)
             {
                 throw new NotSupportedException("Unexpected IoGetEvents retval " + res);
             }
-            for (int i = 0; i < readableSockets.Count; i++)
+            // TODO: handle received < advanced
+            // TODO: handle EAGAIN
+            for (int i = 0; i < readableSocketCount; i++)
             {
                 TSocket socket = readableSockets[(int)aioEvents[i].Data];
                 PosixResult result = aioEvents[i].Result;
@@ -651,6 +677,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 socket.OnReceiveFromSocket(receiveResult);
             }
+            readableSockets.Clear();
         }
 
         private static readonly IPAddress NotIPSocket = IPAddress.None;

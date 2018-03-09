@@ -47,8 +47,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private int _flags;
             private Exception   _outputCompleteError;
             private Exception _inputCompleteError;
-            private PipeAwaiter<ReadResult> _readAwaiter;
-            private PipeAwaiter<FlushResult> _flushAwaiter;
+            private ValueTaskAwaiter<ReadResult> _readAwaiter;
+            private ValueTaskAwaiter<FlushResult> _flushAwaiter;
             private int _zeropCopyState;
             private SequencePosition _zeroCopyEnd;
             private readonly Action _onFlushedToApp;
@@ -148,7 +148,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 bool loop = true;
                 do
                 {
-                    _readAwaiter = Output.ReadAsync();
+                    _readAwaiter = Output.ReadAsync().GetAwaiter();
                     if (_readAwaiter.IsCompleted)
                     {
                         loop = OnReadFromApp(loop);
@@ -193,7 +193,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         else if (result.IsSuccess)
                         {
-                            end = buffer.GetPosition(buffer.Start, result.Value);
+                            end = buffer.GetPosition(result.Value);
                         }
                         else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                         {
@@ -380,8 +380,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Socket.Dispose();
             }
 
-            public static unsafe int FillReceiveIOVector(PipeWriter writer, int availableBytes, IOVector* ioVectors, ref int ioVectorLength)
+            public unsafe int FillReceiveIOVector(int availableBytes, IOVector* ioVectors, ref int ioVectorLength)
             {
+                PipeWriter writer = Input;
                 Memory<byte> memory = writer.GetMemory(2048);
                 var allocated = 0;
 
@@ -413,19 +414,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return advanced;
             }
 
-            public static int CalcIoVectorLength(PipeWriter writer, int availableBytes)
+            public int CalcIoVectorLength(int availableBytes, int maxLength)
             {
-                Memory<byte> memory = writer.GetMemory(2048);
+                Memory<byte> memory = Input.GetMemory(2048);
                 return availableBytes <= memory.Length ? 1 :
-                       Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, MaxIOVectorReceiveLength);
+                       Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, maxLength);
             }
 
             public unsafe Exception Receive(int availableBytes = 0)
             {
                 PipeWriter writer = Input;
-                int ioVectorLength = CalcIoVectorLength(writer, availableBytes);
+                int ioVectorLength = CalcIoVectorLength(availableBytes, MaxIOVectorReceiveLength);
                 var ioVectors = stackalloc IOVector[ioVectorLength];
-                int advanced = FillReceiveIOVector(writer, availableBytes, ioVectors, ref ioVectorLength);
+                int advanced = FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
 
                 // Ideally we get availableBytes in a single receive
                 // but we are happy if we get at least a part of it
@@ -540,7 +541,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             private void FlushToApp()
             {
-                _flushAwaiter = Input.FlushAsync();
+                _flushAwaiter = Input.FlushAsync().GetAwaiter();
                 if (_flushAwaiter.IsCompleted)
                 {
                     OnFlushedToApp();

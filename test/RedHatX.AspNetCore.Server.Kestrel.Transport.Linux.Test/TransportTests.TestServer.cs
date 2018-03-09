@@ -49,7 +49,8 @@ namespace Tests
             {
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept,
-                CheckAvailable = options.CheckAvailable
+                CheckAvailable = options.CheckAvailable,
+                AioReceive = true // TODO: add test
             };
             var loggerFactory = new LoggerFactory();
             loggerFactory.AddConsole((n, l) => false);
