@@ -125,6 +125,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void ScheduleSend(TSocket socket)
             {
+                // TODO: remove this function
                 int epollState;
                 lock (_schedulerGate)
                 {
