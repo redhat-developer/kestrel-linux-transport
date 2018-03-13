@@ -424,7 +424,7 @@ namespace Tests
             }
         }
 
-        private static unsafe void AssertCounter(ref ReadOnlyBuffer<byte> buffer, ref int bytesReceived, ref int remainderRef)
+        private static unsafe void AssertCounter(ref ReadOnlySequence<byte> buffer, ref int bytesReceived, ref int remainderRef)
         {
             int remainder = remainderRef;
             int currentValue = bytesReceived / 4;

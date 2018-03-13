@@ -3,7 +3,6 @@ using System.Buffers;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.Sequences;
 using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
@@ -33,16 +32,23 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private static readonly int MaxSendLength;
         static TransportThread()
         {
-            using (var memoryPool = new MemoryPool())
+            using (var memoryPool = KestrelMemoryPool.Create())
             {
                 MaxPooledBlockLength = memoryPool.MaxBufferSize;
                 MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
             }
         }
 
+        private class CallbackAdapter<T>
+        {
+            public static readonly Action<object, object> PostCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
+            public static readonly Action<object, object> PostAsyncCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
+        }
+
         private struct ScheduledAction
         {
-            public Action<object> Action;
+            public Action<object, object> CallbackAdapter;
+            public object Callback;
             public Object State;
         }
 
@@ -698,11 +704,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 while (true)
                 {
                     var readResult = await tsocket.Output.ReadAsync();
-                    ReadOnlyBuffer<byte> buffer = readResult.Buffer;
+                    ReadOnlySequence<byte> buffer = readResult.Buffer;
                     SequencePosition end = buffer.Start;
                     try
                     {
-                        if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCancelled)
+                        if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCanceled)
                         {
                             // EOF or TransportThread stopped
                             break;
@@ -717,7 +723,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             }
                             else if (result.IsSuccess)
                             {
-                                end = buffer.GetPosition(buffer.Start, result.Value);
+                                end = buffer.GetPosition(result.Value);
                             }
                             else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                             {
@@ -767,7 +773,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadOnlyBuffer<byte> buffer)
+        private static unsafe (PosixResult, bool zerocopyRegistered) TrySend(TSocket tsocket, bool zerocopy, ref ReadOnlySequence<byte> buffer)
         {
             bool zeroCopyRegistered = false;
             int fd = tsocket.Fd;
@@ -939,7 +945,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         {
                             var flushResult = await tsocket.Input.FlushAsync();
                             if (flushResult.IsCompleted || // Reader has stopped
-                                flushResult.IsCancelled)   // TransportThread has stopped
+                                flushResult.IsCanceled)   // TransportThread has stopped
                             {
                                 error = new ConnectionAbortedException();
                                 break;
@@ -947,7 +953,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         catch (Exception e)
                         {
-                            tsocket.Input.Commit();
                             error = e;
                             break;
                         }
@@ -1154,9 +1159,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static long EPollData(int fd) => (((long)(uint)fd) << 32) | (long)(uint)fd;
 
-        internal static MemoryPool CreateMemoryPool()
+        internal static MemoryPool<byte> CreateMemoryPool()
         {
-            return new MemoryPool();
+            return KestrelMemoryPool.Create();
         }
     }
 }

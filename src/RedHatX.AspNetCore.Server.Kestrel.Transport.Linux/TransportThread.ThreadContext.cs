@@ -46,7 +46,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly TransportThread TransportThread;
             // key is the file descriptor
             public readonly Dictionary<int, TSocket> Sockets;
-            public MemoryPool MemoryPool;
+            public MemoryPool<byte> MemoryPool;
             public readonly List<TSocket> AcceptSockets;
 
             private EPoll EPoll;
@@ -60,18 +60,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Volatile.Write(ref _epollState, EPollNotBlocked);
             }
 
-            public override void Schedule(Action action)
+            public override void Schedule<TState>(Action<TState> action, TState state)
             {
-                Schedule(state => ((Action)state)(), action);
-            }
-
-            public override void Schedule(Action<object> action, object state)
-            {
+                // TODO: remove this function
                 int epollState;
                 lock (_schedulerGate)
                 {
                     epollState = Interlocked.CompareExchange(ref _epollState, EPollNotBlocked, EPollBlocked);
-                    _schedulerAdding.Enqueue(new ScheduledAction { Action = action, State = state });
+                    _schedulerAdding.Enqueue(new ScheduledAction { Callback = action, State = state, CallbackAdapter = CallbackAdapter<TState>.PostCallbackAdapter });
                 }
                 if (epollState == EPollBlocked)
                 {
@@ -96,7 +92,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     while (queue.Count != 0)
                     {
                         var scheduledAction = queue.Dequeue();
-                        scheduledAction.Action(scheduledAction.State);
+                        scheduledAction.CallbackAdapter(scheduledAction.Callback, scheduledAction.State);
                     }
                 } while (queueNotEmpty && --loopsRemaining > 0);
 
@@ -120,7 +116,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void CloseAccept()
             {
-                (this as PipeScheduler).Schedule(_ =>
+                (this as PipeScheduler).Schedule<object>(_ =>
                 {
                     this.TransportThread.CloseAccept(this, Sockets);
                 }, null);

@@ -218,7 +218,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public bool IsZeroCopyFinished() => (Flags & SocketFlags.WriteStopped) == SocketFlags.None;
 
-            public override MemoryPool MemoryPool => ThreadContext.MemoryPool;
+            public override MemoryPool<byte> MemoryPool => ThreadContext.MemoryPool;
 
             public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
 
