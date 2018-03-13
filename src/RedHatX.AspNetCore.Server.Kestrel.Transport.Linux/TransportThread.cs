@@ -29,13 +29,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private const byte PipeStopSockets    = 2;
 
         private static readonly int MaxPooledBlockLength;
-        private static readonly int MaxSendLength;
         static TransportThread()
         {
             using (var memoryPool = KestrelMemoryPool.Create())
             {
                 MaxPooledBlockLength = memoryPool.MaxBufferSize;
-                MaxSendLength = MaxIOVectorSendLength * MaxPooledBlockLength;
             }
         }
 
@@ -614,7 +612,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        internal const int IoVectorsPerAioSocket = 32;
+        internal const int IoVectorsPerAioSocket = 8;
 
         struct AioReceiveState
         {
@@ -639,7 +637,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             for (int i = 0; i < readableSocketCount; i++)
             {
                 TSocket socket = readableSockets[i];
-                int availableBytes = 0;
+                int availableBytes = 0; // TODO
                 int ioVectorLength = socket.CalcIoVectorLength(availableBytes, IoVectorsPerAioSocket);
                 int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
                 receiveStates[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength};
@@ -896,13 +894,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return KestrelMemoryPool.Create();
         }
 
-        private void PerformSends(Queue<ScheduledSend> sendQueue)
+        private unsafe void PerformSends(List<ScheduledSend> sendQueue)
         {
-            while (sendQueue.Count > 0)
+            for (int i = 0; i < sendQueue.Count; i++)
             {
-                ScheduledSend scheduledSend = sendQueue.Dequeue();
-                scheduledSend.Socket.DoDeferedSend();
+                sendQueue[i].Socket.DoDeferedSend();
             }
+            sendQueue.Clear();
         }
     }
 }

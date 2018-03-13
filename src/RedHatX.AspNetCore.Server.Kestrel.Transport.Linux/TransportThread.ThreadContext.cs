@@ -27,8 +27,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 AcceptSockets = new List<TSocket>();
                 _schedulerAdding = new Queue<ScheduledAction>(1024);
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
-                _scheduledSendAdding = new Queue<ScheduledSend>(1024);
-                _scheduledSendRunning = new Queue<ScheduledSend>(1024);
+                _scheduledSendAdding = new List<ScheduledSend>(1024);
+                _scheduledSendRunning = new List<ScheduledSend>(1024);
                 _epollState = EPollBlocked;
                 if (transportOptions.AioReceive | transportOptions.AioSend)
                 {
@@ -81,8 +81,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly object _schedulerGate = new object();
             private Queue<ScheduledAction> _schedulerAdding;
             private Queue<ScheduledAction> _schedulerRunning;
-            private Queue<ScheduledSend> _scheduledSendAdding;
-            private Queue<ScheduledSend> _scheduledSendRunning;
+            private List<ScheduledSend> _scheduledSendAdding;
+            private List<ScheduledSend> _scheduledSendRunning;
 
             private IntPtr _aioEventsMemory;
             public unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
@@ -129,7 +129,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 lock (_schedulerGate)
                 {
                     epollState = Interlocked.CompareExchange(ref _epollState, EPollNotBlocked, EPollBlocked);
-                    _scheduledSendAdding.Enqueue(new ScheduledSend { Socket = socket });
+                    _scheduledSendAdding.Add(new ScheduledSend { Socket = socket });
                 }
                 if (epollState == EPollBlocked)
                 {
@@ -140,7 +140,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public void DoScheduledWork()
             {
                 Queue<ScheduledAction> queue;
-                Queue<ScheduledSend> sendQueue;
+                List<ScheduledSend> sendQueue;
                 lock (_schedulerGate)
                 {
                     queue = _schedulerAdding;

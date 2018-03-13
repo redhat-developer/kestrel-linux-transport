@@ -189,91 +189,101 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 OnReadFromApp(loop: false);
             }
 
-            private bool OnReadFromApp(bool loop)
+            private static readonly Exception StopSentinel = new Exception();
+
+            public Exception GetReadResult(out ReadOnlySequence<byte> buffer)
             {
-                Exception error = null;
-                bool stop = false;
                 try
                 {
-                    var readResult = _readAwaiter.GetResult();
-                    ReadOnlySequence<byte> buffer = readResult.Buffer;
-                    SequencePosition end = buffer.Start;
-                    bool zerocopy = false;
-                    bool zeroCopyRegistered = false;
+                    ReadResult readResult = _readAwaiter.GetResult();
+                    buffer = readResult.Buffer;
                     if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCanceled)
                     {
                         // EOF or TransportThread stopped
-                        stop = true;
-                    }
-                    else if (!buffer.IsEmpty)
-                    {
-                        zerocopy = buffer.Length >= ZeroCopyThreshold;
-                        PosixResult result;
-                        (result, zeroCopyRegistered) = TrySend(zerocopy, ref buffer);
-                        if (result.Value == buffer.Length)
-                        {
-                            end = buffer.End;
-                        }
-                        else if (result.IsSuccess)
-                        {
-                            end = buffer.GetPosition(result.Value);
-                        }
-                        else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
-                        {
-                            Output.AdvanceTo(end);
-                            WaitSocketWritable();
-                            return false;
-                        }
-                        else if (zerocopy && result == PosixResult.ENOBUFS)
-                        {
-                            // We reached the max locked memory (ulimit -l), disable zerocopy.
-                            ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
-                        }
-                        else
-                        {
-                            error = result.AsException();
-                            stop = true;
-                        }
-                        if (zerocopy)
-                        {
-                            if (result.Value > 0)
-                            {
-                                _zeroCopyEnd = end;
-                            }
-                            else
-                            {
-                                zerocopy = false;
-                            }
-                        }
-                    }
-                    if (zerocopy)
-                    {
-                        return WaitZeroCopyComplete(loop, zeroCopyRegistered);
+                        return StopSentinel;
                     }
                     else
                     {
-                        // We need to call Advance to end the read
-                        Output.AdvanceTo(end);
+                        return null;
                     }
                 }
                 catch (Exception e)
                 {
-                    stop = true;
-                    error = e;
+                    buffer = default(ReadOnlySequence<byte>);
+                    return e;
                 }
-                if (stop)
+            }
+
+            private unsafe bool OnReadFromApp(bool loop)
+            {
+                ReadOnlySequence<byte> buffer;
+                Exception error = GetReadResult(out buffer);
+                if (error != null)
                 {
+                    if (error == StopSentinel)
+                    {
+                        error = null;
+                    }
                     CompleteOutput(error);
-                    loop = false;
+                    return false;
                 }
                 else
                 {
-                    if (!loop)
-                    {
-                        ReadFromApp();
-                    }
+                    int ioVectorLength = IoVectorLength(ref buffer, MaxIOVectorSendLength);
+                    var ioVectors = stackalloc IOVector[ioVectorLength];
+                    FillIoVectors(ref buffer, ioVectors, ioVectorLength);
+                    bool zerocopy = buffer.Length >= ZeroCopyThreshold;
+
+                    (PosixResult result, bool zeroCopyRegistered) = TrySend(zerocopy, ioVectors, ioVectorLength);
+
+                    return HandleReadResult(ref buffer, result, loop, zerocopy, zeroCopyRegistered);
                 }
-                return loop;
+            }
+
+            private bool HandleReadResult(ref ReadOnlySequence<byte> buffer, PosixResult result, bool loop, bool zerocopy, bool zeroCopyRegistered)
+            {
+                SequencePosition end;
+                if (result.Value == buffer.Length)
+                {
+                    end = buffer.End;
+                }
+                else if (result.IsSuccess)
+                {
+                    end = buffer.GetPosition(result.Value);
+                }
+                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                {
+                    Output.AdvanceTo(buffer.Start);
+                    WaitSocketWritable();
+                    return false;
+                }
+                else if (zerocopy && result == PosixResult.ENOBUFS)
+                {
+                    // We reached the max locked memory (ulimit -l), disable zerocopy.
+                    end = buffer.Start;
+                    ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                }
+                else
+                {
+                    CompleteOutput(result.AsException());
+                    return false;
+                }
+                if (zerocopy && result.Value > 0)
+                {
+                    _zeroCopyEnd = end;
+                    return WaitZeroCopyComplete(loop, zeroCopyRegistered);
+                }
+                // We need to call Advance to end the read
+                Output.AdvanceTo(end);
+                if (loop)
+                {
+                    return true;
+                }
+                else
+                {
+                    ReadFromApp();
+                    return false;
+                }
             }
 
             private bool WaitZeroCopyComplete(bool loop, bool registered)
@@ -608,9 +618,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 CleanupSocketEnd();
             }
 
-            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, ref ReadOnlySequence<byte> buffer)
+            private int IoVectorLength(ref ReadOnlySequence<byte> buffer, int maxIOVectorSendLength)
             {
-                bool zeroCopyRegistered = false;
                 int ioVectorLength = 0;
                 foreach (var memory in buffer)
                 {
@@ -619,18 +628,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         continue;
                     }
                     ioVectorLength++;
-                    if (ioVectorLength == MaxIOVectorSendLength)
+                    if (ioVectorLength == maxIOVectorSendLength)
                     {
                         // No more room in the IOVector
                         break;
                     }
                 }
-                if (ioVectorLength == 0)
-                {
-                    return (new PosixResult(0), zeroCopyRegistered);
-                }
+                return ioVectorLength;
+            }
 
-                var ioVectors = stackalloc IOVector[ioVectorLength];
+            private unsafe void FillIoVectors(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength)
+            {
                 int i = 0;
                 foreach (var memory in buffer)
                 {
@@ -651,6 +659,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         break;
                     }
                 }
+            }
+
+            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, IOVector* ioVectors, int ioVectorLength)
+            {
+                bool zeroCopyRegistered = false;
 
                 if (zerocopy)
                 {
