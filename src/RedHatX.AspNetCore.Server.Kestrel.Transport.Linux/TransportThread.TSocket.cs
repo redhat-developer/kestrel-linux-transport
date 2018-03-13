@@ -189,8 +189,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 OnReadFromApp(loop: false);
             }
 
-            private static readonly Exception StopSentinel = new Exception();
-
             public Exception GetReadResult(out ReadOnlySequence<byte> buffer)
             {
                 try
@@ -240,7 +238,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private bool HandleReadResult(ref ReadOnlySequence<byte> buffer, PosixResult result, bool loop, bool zerocopy, bool zeroCopyRegistered)
+            public bool HandleReadResult(ref ReadOnlySequence<byte> buffer, PosixResult result, bool loop, bool zerocopy, bool zeroCopyRegistered)
             {
                 SequencePosition end;
                 if (result.Value == buffer.Length)
@@ -332,7 +330,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private void CompleteOutput(Exception e)
+            public void CompleteOutput(Exception e)
             {
                 _outputCompleteError = e;
                 StopReadFromSocket(e);
@@ -618,7 +616,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 CleanupSocketEnd();
             }
 
-            private int IoVectorLength(ref ReadOnlySequence<byte> buffer, int maxIOVectorSendLength)
+            public int IoVectorLength(ref ReadOnlySequence<byte> buffer, int maxIOVectorSendLength)
             {
                 int ioVectorLength = 0;
                 foreach (var memory in buffer)
@@ -637,7 +635,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return ioVectorLength;
             }
 
-            private unsafe void FillIoVectors(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength)
+            public unsafe void FillIoVectors(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength)
             {
                 int i = 0;
                 foreach (var memory in buffer)

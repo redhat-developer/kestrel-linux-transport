@@ -398,6 +398,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 var sockets = threadContext.Sockets;
                 bool checkAvailable = _transportOptions.CheckAvailable;
                 bool aioReceive = _transportOptions.AioReceive;
+                bool aioSend = _transportOptions.AioSend;
 
                 var acceptableSockets = new List<TSocket>(1);
                 var readableSockets = new List<TSocket>(EventBufferLength);
@@ -589,7 +590,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
 
                     // scheduled work
-                    threadContext.DoScheduledWork();
+                    threadContext.DoScheduledWork(aioSend);
 
                 } while (running);
 
@@ -609,6 +610,80 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 threadContext?.Dispose();
 
                 CompleteStateChange(State.Stopped);
+            }
+        }
+
+        private unsafe void AioSend(List<ScheduledSend> sendQueue)
+        {
+            while (sendQueue.Count > 0)
+            {
+                int sendCount = 0;
+                int completedCount = 0;
+                AioCb* aioCbs = _threadContext.AioCbs;
+                IOVector* ioVectors = _threadContext.IoVectorTable;
+                ReadOnlySequence<byte>[] sendBuffers = _threadContext.SendBuffers;
+                for (int i = 0; i < sendQueue.Count; i++)
+                {
+                    TSocket socket = sendQueue[i].Socket;
+                    ReadOnlySequence<byte> buffer;
+                    Exception error = socket.GetReadResult(out buffer);
+                    if (error != null)
+                    {
+                        socket.CompleteOutput(error == StopSentinel ? null : error);
+                        completedCount++;
+                    }
+                    else
+                    {
+                        int ioVectorLength = socket.IoVectorLength(ref buffer, IoVectorsPerAioSocket);
+                        socket.FillIoVectors(ref buffer, ioVectors, ioVectorLength);
+
+                        aioCbs->Fd = socket.Fd;
+                        aioCbs->Data = i;
+                        aioCbs->OpCode = AioOpCode.PWritev;
+                        aioCbs->Buffer = ioVectors;
+                        aioCbs->Length = ioVectorLength;
+                        aioCbs++;
+
+                        sendBuffers[sendCount] = buffer;
+                        sendCount++;
+                        if (sendCount == EventBufferLength)
+                        {
+                            break;
+                        }
+
+                        ioVectors += ioVectorLength;
+                    }
+                }
+                if (sendCount > 0)
+                {
+                    IntPtr      ctxp = _threadContext.AioContext;
+                    PosixResult res = AioInterop.IoSubmit(ctxp, sendCount, _threadContext.AioCbsTable);
+                    if (res != sendCount)
+                    {
+                        throw new NotSupportedException("Unexpected IoSubmit Send retval " + res);
+                    }
+
+                    AioEvent* aioEvents = _threadContext.AioEvents;
+                    AioInterop.IoGetEvents(ctxp, sendCount, sendCount, aioEvents, -1);
+                    if (res != sendCount)
+                    {
+                        throw new NotSupportedException("Unexpected IoGetEvents Send retval " + res);
+                    }
+
+                    AioEvent* aioEvent = aioEvents;
+                    for (int i = 0; i < sendCount; i++)
+                    {
+                        PosixResult result = aioEvent->Result;
+                        int socketIndex = (int)aioEvent->Data;
+                        TSocket socket = sendQueue[socketIndex].Socket;
+                        ReadOnlySequence<byte> buffer = sendBuffers[i]; // assumes in-order events
+                        sendBuffers[i] = default;
+                        socket.HandleReadResult(ref buffer, result, loop: false, zerocopy: false, zeroCopyRegistered: false);
+                        aioEvent++;
+                    }
+                }
+
+                sendQueue.RemoveRange(0, sendCount + completedCount);
             }
         }
 
@@ -669,7 +744,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     AioEvent* aioEvent = &aioEvents[i];
                     PosixResult result = aioEvent->Result;
-                    int socketIndex = (int)aioEvent->Data;
+                    int socketIndex = i; // assumes in-order events
                     TSocket socket = readableSockets[socketIndex];
                     ref AioReceiveState receiveState = ref receiveStates[socketIndex];
                     (bool done, Exception retval) = socket.InterpretReceiveResult(result, ref receiveState.Received, receiveState.Advanced, (IOVector*)aioEvent->AioCb->Buffer, receiveState.IoVectorLength);
@@ -822,6 +897,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         internal static readonly Exception EofSentinel = new Exception();
         internal static readonly Exception EAgainSentinel = new Exception();
+        private static readonly Exception StopSentinel = new Exception();
 
         private void CloseAccept(ThreadContext threadContext, Dictionary<int, TSocket> sockets)
         {
@@ -894,13 +970,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             return KestrelMemoryPool.Create();
         }
 
-        private unsafe void PerformSends(List<ScheduledSend> sendQueue)
+        private unsafe void PerformSends(List<ScheduledSend> sendQueue, bool aioSend)
         {
-            for (int i = 0; i < sendQueue.Count; i++)
+            if (aioSend)
             {
-                sendQueue[i].Socket.DoDeferedSend();
+                AioSend(sendQueue);
             }
-            sendQueue.Clear();
+            else
+            {
+                for (int i = 0; i < sendQueue.Count; i++)
+                {
+                    sendQueue[i].Socket.DoDeferedSend();
+                }
+                sendQueue.Clear();
+            }
         }
     }
 }

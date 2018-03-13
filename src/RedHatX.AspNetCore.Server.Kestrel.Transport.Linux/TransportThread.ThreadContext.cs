@@ -41,6 +41,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         AioCbsTable[i] = &AioCbs[i];
                     }
                     AioResults = new Exception[TransportThread.EventBufferLength];
+                    if (transportOptions.AioSend)
+                    {
+                        SendBuffers = new ReadOnlySequence<byte>[TransportThread.EventBufferLength];
+                    }
                 }
             }
 
@@ -94,6 +98,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe IOVector* IoVectorTable => (IOVector*)Align(_ioVectorTableMemory);
             public IntPtr AioContext;
             public Exception[] AioResults;
+            public ReadOnlySequence<byte>[] SendBuffers;
 
             private unsafe void* Align(IntPtr p)
             {
@@ -138,7 +143,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            public void DoScheduledWork()
+            public void DoScheduledWork(bool aioSend)
             {
                 Queue<ScheduledAction> queue;
                 List<ScheduledSend> sendQueue;
@@ -154,7 +159,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (sendQueue.Count > 0)
                 {
-                    TransportThread.PerformSends(sendQueue);
+                    TransportThread.PerformSends(sendQueue, aioSend);
                 }
                 while (queue.Count != 0)
                 {
