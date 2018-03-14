@@ -197,10 +197,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             var sockets = threadContext.Sockets;
             try
             {
-                tsocket = new TSocket(threadContext, flags)
+                tsocket = new TSocket(threadContext, acceptSocket, fd, flags)
                 {
-                    Fd = fd,
-                    Socket = acceptSocket,
                     ZeroCopyThreshold = zeroCopyThreshold
                 };
                 threadContext.AcceptSockets.Add(tsocket);
@@ -519,7 +517,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     // zero copy
                     for (int i = 0; i < zeroCopyCompletions.Count; i++)
                     {
-                        zeroCopyCompletions[i].CompleteZeroCopy();
+                        zeroCopyCompletions[i].OnZeroCopyCompleted();
                     }
                     zeroCopyCompletions.Clear();
 
@@ -634,8 +632,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     else
                     {
-                        int ioVectorLength = socket.IoVectorLength(ref buffer, IoVectorsPerAioSocket);
-                        socket.FillIoVectors(ref buffer, ioVectors, ioVectorLength);
+                        int ioVectorLength = socket.CalcIOVectorLengthForSend(ref buffer, IoVectorsPerAioSocket);
+                        socket.FillSendIOVector(ref buffer, ioVectors, ioVectorLength);
 
                         aioCbs->Fd = socket.Fd;
                         aioCbs->Data = i;
@@ -713,7 +711,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 TSocket socket = readableSockets[i];
                 int availableBytes = 0; // TODO
-                int ioVectorLength = socket.CalcIoVectorLength(availableBytes, IoVectorsPerAioSocket);
+                int ioVectorLength = socket.CalcIOVectorLengthForReceive(availableBytes, IoVectorsPerAioSocket);
                 int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
                 receiveStates[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength};
 
@@ -853,11 +851,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         tacceptSocket.LocalAddress = NotIPSocket;
                         ipSocket = false;
                     }
-
-                    tsocket = new TSocket(threadContext, SocketFlags.TypeClient | (tacceptSocket.Flags & SocketFlags.DeferSend))
+                    
+                    SocketFlags flags = SocketFlags.TypeClient | (tacceptSocket.IsDeferSend ? SocketFlags.DeferSend : SocketFlags.None);
+                    tsocket = new TSocket(threadContext, clientSocket, fd, flags)
                     {
-                        Fd = fd,
-                        Socket = clientSocket,
                         RemoteAddress = remoteAddress.Address,
                         RemotePort = remoteAddress.Port,
                         LocalAddress = localAddress.Address,
@@ -884,7 +881,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     sockets.Add(fd, tsocket);
                 }
 
-                bool dataMayBeAvailable = (tacceptSocket.Flags & SocketFlags.DeferAccept) != 0;
+                bool dataMayBeAvailable = tacceptSocket.IsDeferAccept;
                 tsocket.Start(dataMayBeAvailable);
 
                 return 1;

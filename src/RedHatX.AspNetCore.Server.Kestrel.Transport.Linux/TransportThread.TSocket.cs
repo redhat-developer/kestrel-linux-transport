@@ -33,80 +33,90 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             TypeMask        = 0x300,
 
             DeferAccept     = 0x400,
-            WriteStopped    = 0x1000,
-            ReadStopped     = 0x2000,
+            WriteCanceled    = 0x1000,
+            ReadCanceled     = 0x2000,
 
             DeferSend       = 0x4000
         }
 
         class TSocket : TransportConnection
         {
-            public int ZeroCopyThreshold;
-            public readonly object Gate = new object();
-            public ThreadContext ThreadContext;
-            public int         Fd;
-            public Socket      Socket;
-            private int _flags;
-            private Exception   _outputCompleteError;
-            private Exception _inputCompleteError;
-            private ValueTaskAwaiter<ReadResult> _readAwaiter;
-            private ValueTaskAwaiter<FlushResult> _flushAwaiter;
-            private int _zeropCopyState;
-            private SequencePosition _zeroCopyEnd;
-            private readonly Action _onFlushedToApp;
-            private readonly Action _onReadFromApp;
-
             private const int ZeroCopyNone = 0;
             private const int ZeroCopyComplete = 1;
             private const int ZeroCopyAwait = 2;
+            private const int MinAllocBufferSize = 2048;
             private const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
             public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
 
-            public TSocket(ThreadContext threadContext, SocketFlags flags)
+            public readonly object         Gate = new object();
+            public readonly ThreadContext  ThreadContext;
+            public readonly Socket         Socket; // TODO: remove
+            public readonly int            Fd;
+            private readonly Action       _onFlushedToApp;
+            private readonly Action       _onReadFromApp;
+
+            public int                     ZeroCopyThreshold;
+
+            private SocketFlags           _flags;
+            private Exception             _outputCompleteError;
+            private Exception             _inputCompleteError;
+            private ValueTaskAwaiter<ReadResult>  _readAwaiter;
+            private ValueTaskAwaiter<FlushResult> _flushAwaiter;
+            private int                   _zeropCopyState;
+            private SequencePosition      _zeroCopyEnd;
+
+            public TSocket(ThreadContext threadContext, Socket socket, int fd, SocketFlags flags)
             {
+                Socket = socket;
                 ThreadContext = threadContext;
-                _flags = (int)flags;
+                Fd = fd;
+                _flags = flags;
                 _onFlushedToApp = new Action(OnFlushedToApp);
-                _onReadFromApp = new Action(OnReadFromApp);
+                _onReadFromApp = new Action(() => OnReadFromApp(loop: false));
             }
 
-            public SocketFlags Flags
-            {
-                get { return (SocketFlags)_flags; }
-            }
+            public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
+
+            public bool IsDeferSend => HasFlag(SocketFlags.DeferSend);
 
             public SocketFlags Type => ((SocketFlags)_flags & SocketFlags.TypeMask);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private bool HasFlag(SocketFlags flag) => HasFlag(_flags, flag);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private bool HasFlag(SocketFlags flags, SocketFlags flag) => (_flags & flag) != 0;
 
             // must be called under Gate
             public EPollEvents PendingEventState
             {
                 get => (EPollEvents)_flags;
-                set => _flags = (int)value;
+                set => _flags = (SocketFlags)value;
             }
 
-            private void StopWriteToSocket()
+            private void CancelWriteToSocket()
             {
                 bool completeWritable = false;
                 lock (Gate)
                 {
-                    var flags = Flags;
-                    if ((flags & SocketFlags.WriteStopped) != SocketFlags.None)
+                    var flags = _flags;
+                    if (HasFlag(flags, SocketFlags.WriteCanceled))
                     {
                         return;
                     }
-                    if ((Flags & SocketFlags.AwaitWritable) != SocketFlags.None)
+                    if (HasFlag(flags, SocketFlags.AwaitWritable))
                     {
                         completeWritable = true;
                     }
-                    if ((Flags & SocketFlags.AwaitZeroCopy) != SocketFlags.None)
+                    if (HasFlag(flags, SocketFlags.AwaitZeroCopy))
                     {
                         // Terminate pending zero copy
                         // Call it under Gate so it doesn't race with Close
                         SocketInterop.Disconnect(Fd);
                     }
                     flags &= ~SocketFlags.AwaitWritable;
-                    flags |= SocketFlags.WriteStopped;
-                    _flags = (int)flags;
+                    flags |= SocketFlags.WriteCanceled;
+                    _flags = flags;
                 }
                 if (completeWritable)
                 {
@@ -114,24 +124,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private void StopReadFromSocket(Exception exception)
+            private void CancelReadFromSocket(Exception exception)
             {
                 bool completeReadable = false;
                 lock (Gate)
                 {
-                    var flags = Flags;
-                    if ((flags & SocketFlags.ReadStopped) != SocketFlags.None)
+                    var flags = _flags;
+                    if (HasFlag(flags, SocketFlags.ReadCanceled))
                     {
                         return;
                     }
-                    if ((Flags & SocketFlags.AwaitReadable) != SocketFlags.None)
+                    if (HasFlag(flags, SocketFlags.AwaitReadable))
                     {
                         completeReadable = true;
                     }
                     flags &= ~SocketFlags.AwaitReadable;
-                    flags |= SocketFlags.ReadStopped;
+                    flags |= SocketFlags.ReadCanceled;
                     _inputCompleteError = exception ?? TransportThread.EofSentinel;
-                    _flags = (int)flags;
+                    _flags = flags;
                 }
                 if (completeReadable)
                 {
@@ -139,23 +149,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private void WriteToSocket()
-            {
-                Output.OnWriterCompleted(CompleteWriteToSocket, this);
-                ReadFromApp();
-            }
-
-            private bool DeferSend => (_flags & (int)SocketFlags.DeferSend) != 0;
-
             private void ReadFromApp()
             {
-                bool loop = !DeferSend;
+                bool deferSend = IsDeferSend;
+                bool loop = !deferSend;
                 do
                 {
                     _readAwaiter = Output.ReadAsync().GetAwaiter();
                     if (_readAwaiter.IsCompleted)
                     {
-                        if (DeferSend)
+                        if (deferSend)
                         {
                             ThreadContext.ScheduleSend(this);
                         }
@@ -174,7 +177,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             private void OnReadFromApp()
             {
-                if (DeferSend)
+                if (IsDeferSend)
                 {
                     ThreadContext.ScheduleSend(this);
                 }
@@ -189,6 +192,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 OnReadFromApp(loop: false);
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public Exception GetReadResult(out ReadOnlySequence<byte> buffer)
             {
                 try
@@ -227,9 +231,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else
                 {
-                    int ioVectorLength = IoVectorLength(ref buffer, MaxIOVectorSendLength);
+                    int ioVectorLength = CalcIOVectorLengthForSend(ref buffer, MaxIOVectorSendLength);
                     var ioVectors = stackalloc IOVector[ioVectorLength];
-                    FillIoVectors(ref buffer, ioVectors, ioVectorLength);
+                    FillSendIOVector(ref buffer, ioVectors, ioVectorLength);
                     bool zerocopy = buffer.Length >= ZeroCopyThreshold;
 
                     (PosixResult result, bool zeroCopyRegistered) = TrySend(zerocopy, ioVectors, ioVectorLength);
@@ -238,6 +242,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public bool HandleReadResult(ref ReadOnlySequence<byte> buffer, PosixResult result, bool loop, bool zerocopy, bool zeroCopyRegistered)
             {
                 SequencePosition end;
@@ -273,15 +278,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 // We need to call Advance to end the read
                 Output.AdvanceTo(end);
-                if (loop)
-                {
-                    return true;
-                }
-                else
+                if (!loop)
                 {
                     ReadFromApp();
-                    return false;
                 }
+                return loop;
             }
 
             private bool WaitZeroCopyComplete(bool loop, bool registered)
@@ -292,14 +293,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     if (previousState == ZeroCopyComplete)
                     {
                         // registered, complete
-                        Volatile.Write(ref _zeropCopyState, ZeroCopyNone);
-                        Output.AdvanceTo(_zeroCopyEnd);
-                        _zeroCopyEnd = default(SequencePosition);
-                        if (!loop)
-                        {
-                            ReadFromApp();
-                        }
-                        return loop;
+                        return FinishZeroCopy(loop);
                     }
                     else
                     {
@@ -318,22 +312,32 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            public void CompleteZeroCopy()
+            public void OnZeroCopyCompleted()
             {
                 int previousState = Interlocked.CompareExchange(ref _zeropCopyState, ZeroCopyAwait, ZeroCopyNone);
                 if (previousState == ZeroCopyAwait)
                 {
-                    Volatile.Write(ref _zeropCopyState, ZeroCopyNone);
-                    Output.AdvanceTo(_zeroCopyEnd);
-                    _zeroCopyEnd = default(SequencePosition);
+                    FinishZeroCopy(loop: false);
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private bool FinishZeroCopy(bool loop)
+            {
+                Volatile.Write(ref _zeropCopyState, ZeroCopyNone);
+                Output.AdvanceTo(_zeroCopyEnd);
+                _zeroCopyEnd = default(SequencePosition);
+                if (!loop)
+                {
                     ReadFromApp();
                 }
+                return loop;
             }
 
             public void CompleteOutput(Exception e)
             {
                 _outputCompleteError = e;
-                StopReadFromSocket(e);
+                CancelReadFromSocket(e);
                 CleanupSocketEnd();
             }
 
@@ -342,7 +346,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 bool stopped = false;
                 lock (Gate)
                 {
-                    stopped = (Flags & SocketFlags.WriteStopped) != SocketFlags.None;
+                    stopped = HasFlag(SocketFlags.WriteCanceled);
                     if (!stopped)
                     {
                         RegisterFor(EPollEvents.Writable);
@@ -354,6 +358,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void OnWritable(bool stopped)
             {
                 if (stopped)
@@ -366,6 +371,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void RegisterFor(EPollEvents ev)
             {
                 // called under tsocket.Gate
@@ -385,22 +391,23 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 if (ex != null)
                 {
                     var tsocket = (TSocket)state;
-                    tsocket.StopWriteToSocket();
+                    tsocket.CancelWriteToSocket();
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void CleanupSocketEnd()
             {
                 lock (Gate)
                 {
                     _flags = _flags + (int)SocketFlags.CloseEnd;
-                    if ((_flags & (int)SocketFlags.BothClosed) != 0)
+                    if (!HasFlag(SocketFlags.BothClosed))
                     {
                         return;
                     }
                 }
 
-                Output.Complete(_outputCompleteError);
+                Output.Complete(_outputCompleteError); // TODO: should this be called earlier?
 
                 // First remove from the Dictionary, so we can't match with a new fd.
                 ThreadContext.RemoveSocket(Fd);
@@ -411,10 +418,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Socket.Dispose();
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public unsafe int FillReceiveIOVector(int availableBytes, IOVector* ioVectors, ref int ioVectorLength)
             {
                 PipeWriter writer = Input;
-                Memory<byte> memory = writer.GetMemory(2048);
+                Memory<byte> memory = writer.GetMemory(MinAllocBufferSize);
                 var allocated = 0;
 
                 var advanced = 0;
@@ -445,17 +453,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return advanced;
             }
 
-            public int CalcIoVectorLength(int availableBytes, int maxLength)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public int CalcIOVectorLengthForReceive(int availableBytes, int maxLength)
             {
-                Memory<byte> memory = Input.GetMemory(2048);
+                Memory<byte> memory = Input.GetMemory(MinAllocBufferSize);
                 return availableBytes <= memory.Length ? 1 :
                        Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, maxLength);
             }
 
-            public unsafe Exception Receive(int availableBytes = 0)
+            public unsafe Exception Receive(int availableBytes)
             {
-                PipeWriter writer = Input;
-                int ioVectorLength = CalcIoVectorLength(availableBytes, MaxIOVectorReceiveLength);
+                int ioVectorLength = CalcIOVectorLengthForReceive(availableBytes, MaxIOVectorReceiveLength);
                 var ioVectors = stackalloc IOVector[ioVectorLength];
                 int advanced = FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
 
@@ -495,6 +503,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 } while (true);
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public unsafe (bool done, Exception receiveResult) InterpretReceiveResult(PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
             {
                 PipeWriter writer = Input;
@@ -538,7 +547,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 bool stopped = false;
                 lock (Gate)
                 {
-                    stopped = (Flags & SocketFlags.ReadStopped) != SocketFlags.None;
+                    stopped = HasFlag(SocketFlags.ReadCanceled);
                     if (!stopped)
                     {
                         RegisterFor(EPollEvents.Readable);
@@ -550,6 +559,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public void OnReceiveFromSocket(Exception result)
             {
                 if (result == null)
@@ -570,6 +580,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void FlushToApp()
             {
                 _flushAwaiter = Input.FlushAsync().GetAwaiter();
@@ -583,6 +594,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void OnFlushedToApp()
             {
                 Exception error = null;
@@ -616,7 +628,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 CleanupSocketEnd();
             }
 
-            public int IoVectorLength(ref ReadOnlySequence<byte> buffer, int maxIOVectorSendLength)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public int CalcIOVectorLengthForSend(ref ReadOnlySequence<byte> buffer, int maxIOVectorSendLength)
             {
                 int ioVectorLength = 0;
                 foreach (var memory in buffer)
@@ -635,7 +648,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return ioVectorLength;
             }
 
-            public unsafe void FillIoVectors(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public unsafe void FillSendIOVector(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength)
             {
                 int i = 0;
                 foreach (var memory in buffer)
@@ -659,6 +673,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, IOVector* ioVectors, int ioVectorLength)
             {
                 bool zeroCopyRegistered = false;
@@ -668,7 +683,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     lock (Gate)
                     {
                         // Don't start new zerocopies when writting stopped.
-                        if ((Flags & SocketFlags.WriteStopped) != SocketFlags.None)
+                        if (HasFlag(SocketFlags.WriteCanceled))
                         {
                             return (new PosixResult(PosixResult.ECONNABORTED), zeroCopyRegistered);
                         }
@@ -698,15 +713,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void Start(bool dataMayBeAvailable)
             {
-                WriteToSocket();
+                Output.OnWriterCompleted(CompleteWriteToSocket, this);
+                ReadFromApp();
                 // TODO: implement dataMayBeAvailable
                 ReceiveFromSocket();
             }
 
-            public void Stop()
-            {
-                StopWriteToSocket();
-            }
+            public void Stop() => CancelWriteToSocket();
 
             public override MemoryPool<byte> MemoryPool => ThreadContext.MemoryPool;
 
