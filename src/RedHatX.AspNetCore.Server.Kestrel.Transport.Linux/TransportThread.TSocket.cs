@@ -45,11 +45,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private const int ZeroCopyComplete = 1;
             private const int ZeroCopyAwait = 2;
             private const int MinAllocBufferSize = 2048;
+            private const int MSG_ZEROCOPY = 0x4000000;
+            // 128 IOVectors, take up 2KB of stack, can receive/send up to 512KB
+            private const int MaxIOVectorSendLength = 128;
+            private const int MaxIOVectorReceiveLength = 128;
             private const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
             public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
 
+            private static readonly int MaxPooledBlockLength;
+            static TSocket()
+            {
+                using (var memoryPool = KestrelMemoryPool.Create())
+                {
+                    MaxPooledBlockLength = memoryPool.MaxBufferSize;
+                }
+            }
+
             public readonly object         Gate = new object();
-            public readonly ThreadContext  ThreadContext;
+            private readonly ThreadContext _threadContext;
             public readonly Socket         Socket; // TODO: remove
             public readonly int            Fd;
             private readonly Action       _onFlushedToApp;
@@ -68,7 +81,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public TSocket(ThreadContext threadContext, Socket socket, int fd, SocketFlags flags)
             {
                 Socket = socket;
-                ThreadContext = threadContext;
+                _threadContext = threadContext;
                 Fd = fd;
                 _flags = flags;
                 _onFlushedToApp = new Action(OnFlushedToApp);
@@ -140,7 +153,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     flags &= ~SocketFlags.AwaitReadable;
                     flags |= SocketFlags.ReadCanceled;
-                    _inputCompleteError = exception ?? TransportThread.EofSentinel;
+                    _inputCompleteError = exception ?? TransportConstants.EofSentinel;
                     _flags = flags;
                 }
                 if (completeReadable)
@@ -160,7 +173,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         if (deferSend)
                         {
-                            ThreadContext.ScheduleSend(this);
+                            _threadContext.ScheduleSend(this);
                         }
                         else
                         {
@@ -179,7 +192,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 if (IsDeferSend)
                 {
-                    ThreadContext.ScheduleSend(this);
+                    _threadContext.ScheduleSend(this);
                 }
                 else
                 {
@@ -202,7 +215,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     if ((buffer.IsEmpty && readResult.IsCompleted) || readResult.IsCanceled)
                     {
                         // EOF or TransportThread stopped
-                        return StopSentinel;
+                        return TransportConstants.StopSentinel;
                     }
                     else
                     {
@@ -222,7 +235,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Exception error = GetReadResult(out buffer);
                 if (error != null)
                 {
-                    if (error == StopSentinel)
+                    if (error == TransportConstants.StopSentinel)
                     {
                         error = null;
                     }
@@ -382,7 +395,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                 if ((pendingEventState & TSocket.EventControlPending) == EPollEvents.None)
                 {
-                    TransportThread.UpdateEPollControl(this, pendingEventState, registered);
+                    _threadContext.UpdateEPollControl(this, pendingEventState, registered);
                 }
             }
 
@@ -410,7 +423,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Output.Complete(_outputCompleteError); // TODO: should this be called earlier?
 
                 // First remove from the Dictionary, so we can't match with a new fd.
-                ThreadContext.RemoveSocket(Fd);
+                _threadContext.RemoveSocket(Fd);
 
                 // We are not using SafeHandles to increase performance.
                 // We get here when both reading and writing has stopped
@@ -484,14 +497,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         return retval;
                     }
-                    else if (retval == EAgainSentinel)
+                    else if (retval == TransportConstants.EAgainSentinel)
                     {
                         if (availableBytes == 0)
                         {
-                            return EAgainSentinel;
+                            return TransportConstants.EAgainSentinel;
                         }
                         eAgainCount++;
-                        if (eAgainCount == TransportThread.MaxEAgainCount)
+                        if (eAgainCount == TransportConstants.MaxEAgainCount)
                         {
                             return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
                         }
@@ -514,7 +527,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         // We made it!
                         writer.Advance(received - advanced);
-                        return (true, received == 0 ? EofSentinel : null);
+                        return (true, received == 0 ? TransportConstants.EofSentinel : null);
                     }
                     // Update ioVectors to match bytes read
                     var skip = result.Value;
@@ -530,7 +543,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
                 {
-                    return (false, EAgainSentinel);
+                    return (false, TransportConstants.EAgainSentinel);
                 }
                 else if (result == PosixResult.ECONNRESET)
                 {
@@ -566,11 +579,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     FlushToApp();
                 }
-                else if (result == EAgainSentinel)
+                else if (result == TransportConstants.EAgainSentinel)
                 {
                     ReceiveFromSocket();
                 }
-                else if (result == EofSentinel)
+                else if (result == TransportConstants.EofSentinel)
                 {
                     CompleteInput(null);
                 }
@@ -721,7 +734,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void Stop() => CancelWriteToSocket();
 
-            public override MemoryPool<byte> MemoryPool => ThreadContext.MemoryPool;
+            public override MemoryPool<byte> MemoryPool => _threadContext.MemoryPool;
 
             public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
 
