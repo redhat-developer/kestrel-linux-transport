@@ -85,7 +85,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Fd = fd;
                 _flags = flags;
                 _onFlushedToApp = new Action(OnFlushedToApp);
-                _onReadFromApp = new Action(() => OnReadFromApp(loop: false));
+                _onReadFromApp = new Action(OnReadFromApp);
             }
 
             public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
@@ -153,12 +153,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     flags &= ~SocketFlags.AwaitReadable;
                     flags |= SocketFlags.ReadCanceled;
-                    _inputCompleteError = exception ?? TransportConstants.EofSentinel;
+                    _inputCompleteError = exception;
                     _flags = flags;
                 }
                 if (completeReadable)
                 {
-                    CompleteInput(_inputCompleteError);
+                    CompleteInput(exception);
                 }
             }
 

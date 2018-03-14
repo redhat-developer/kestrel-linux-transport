@@ -96,17 +96,16 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public void OnConnection(IFeatureCollection features)
+        public void OnConnection(TransportConnection connection)
         {
-            var transportFeature = features.Get<IConnectionTransportFeature>();
-            var memoryPool = transportFeature.MemoryPool;
-            var input = new Pipe(GetInputPipeOptions(memoryPool, transportFeature.InputWriterScheduler));
-            var output = new Pipe(GetOutputPipeOptions(memoryPool, transportFeature.OutputReaderScheduler));
+            var memoryPool = connection.MemoryPool;
+            var input = new Pipe(GetInputPipeOptions(memoryPool, connection.InputWriterScheduler));
+            var output = new Pipe(GetOutputPipeOptions(memoryPool, connection.OutputReaderScheduler));
 
             _connectionHandler(input.Reader, output.Writer);
 
-            transportFeature.Transport = new DuplexPipe(input.Reader, output.Writer);
-            transportFeature.Application = new DuplexPipe(output.Reader, input.Writer);
+            connection.Transport = new DuplexPipe(input.Reader, output.Writer);
+            connection.Application = new DuplexPipe(output.Reader, input.Writer);
         }
 
         // copied from Kestrel
