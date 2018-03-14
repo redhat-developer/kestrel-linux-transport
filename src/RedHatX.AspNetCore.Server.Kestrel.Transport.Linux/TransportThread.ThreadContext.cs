@@ -409,38 +409,39 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private unsafe void AioReceive(List<TSocket> readableSockets)
             {
                 int readableSocketCount = readableSockets.Count;
-                AioEvent* aioEvents = AioEvents;
-                AioCb* aioCbs = AioCbs;
-                AioCb** aioCbsTable = AioCbsTable;
-                IOVector* ioVectorTable = IoVectorTable;
-                IntPtr ctxp = _aioContext;
                 AioReceiveState* receiveStates = stackalloc AioReceiveState[readableSocketCount];
-                IOVector* ioVectors = ioVectorTable;
-                Exception[] receiveResults = _aioResults;
+                AioCb* aioCb = AioCbs;
+                IOVector* ioVectors = IoVectorTable;
+                Exception[] receiveResults = _aioResults; // TODO: try to get rid of this array
+                bool checkAvailable = _transportOptions.CheckAvailable;
                 for (int i = 0; i < readableSocketCount; i++)
                 {
                     TSocket socket = readableSockets[i];
-                    int availableBytes = 0; // TODO
+                    int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
                     int ioVectorLength = socket.CalcIOVectorLengthForReceive(availableBytes, IoVectorsPerAioSocket);
                     int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
                     receiveStates[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength };
 
-                    aioCbs[i].Fd = socket.Fd;
-                    aioCbs[i].Data = i;
-                    aioCbs[i].OpCode = AioOpCode.PReadv;
-                    aioCbs[i].Buffer = ioVectors;
-                    aioCbs[i].Length = ioVectorLength;
+                    aioCb->Fd = socket.Fd;
+                    aioCb->Data = i;
+                    aioCb->OpCode = AioOpCode.PReadv;
+                    aioCb->Buffer = ioVectors;
+                    aioCb->Length = ioVectorLength;
+                    aioCb++;
 
                     ioVectors += ioVectorLength;
                 }
                 int eAgainCount = 0;
                 while (readableSocketCount > 0)
                 {
-                    PosixResult res = AioInterop.IoSubmit(ctxp, readableSocketCount, aioCbsTable);
+                    IntPtr ctxp = _aioContext;
+                    PosixResult res = AioInterop.IoSubmit(ctxp, readableSocketCount, AioCbsTable);
                     if (res != readableSocketCount)
                     {
                         throw new NotSupportedException("Unexpected IoSubmit retval " + res);
                     }
+
+                    AioEvent* aioEvents = AioEvents;
                     AioInterop.IoGetEvents(ctxp, readableSocketCount, readableSocketCount, aioEvents, -1);
                     if (res != readableSocketCount)
                     {
@@ -448,9 +449,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     int socketsRemaining = readableSocketCount;
                     bool allEAgain = true;
+                    AioEvent* aioEvent = aioEvents;
                     for (int i = 0; i < readableSocketCount; i++)
                     {
-                        AioEvent* aioEvent = &aioEvents[i];
                         PosixResult result = aioEvent->Result;
                         int socketIndex = i; // assumes in-order events
                         TSocket socket = readableSockets[socketIndex];
@@ -467,6 +468,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         {
                             allEAgain = false;
                         }
+                        aioEvent++;
                     }
                     if (socketsRemaining > 0)
                     {
@@ -480,18 +482,20 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         else
                         {
-                            int writeAt = 0;
+                            aioCb = AioCbs;
+                            AioCb* aioCbWriteAt = aioCb;
                             // The kernel doesn't handle Noop, we need to remove them from the aioCbs
                             for (int i = 0; i < readableSocketCount; i++)
                             {
-                                if (aioCbs[i].OpCode != AioOpCode.Noop)
+                                if (aioCb[i].OpCode != AioOpCode.Noop)
                                 {
-                                    if (writeAt != i)
+                                    if (aioCbWriteAt != aioCb)
                                     {
-                                        aioCbs[writeAt] = aioCbs[i];
+                                        *aioCbWriteAt = *aioCb;
                                     }
-                                    writeAt++;
+                                    aioCbWriteAt++;
                                 }
+                                aioCb++;
                             }
                             readableSocketCount = socketsRemaining;
                             eAgainCount = 0;
