@@ -52,7 +52,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly IntPtr _aioCbsTableMemory;
             private readonly IntPtr _ioVectorTableMemory;
             private readonly IntPtr _aioContext;
-            private readonly Exception[] _aioResults;
             private readonly ReadOnlySequence<byte>[] _aioSendBuffers;
 
             public readonly MemoryPool<byte> MemoryPool;
@@ -86,7 +85,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         AioCbsTable[i] = &AioCbs[i];
                     }
-                    _aioResults = new Exception[EventBufferLength];
                     if (_transportOptions.AioSend)
                     {
                         _aioSendBuffers = new ReadOnlySequence<byte>[EventBufferLength];
@@ -414,7 +412,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 int readableSocketCount = readableSockets.Count;
                 AioCb* aioCb = AioCbs;
                 IOVector* ioVectors = IoVectorTable;
-                Exception[] receiveResults = _aioResults; // TODO: try to get rid of this array
+                PosixResult* receiveResults = stackalloc PosixResult[readableSocketCount];
                 bool checkAvailable = _transportOptions.CheckAvailable;
                 for (int i = 0; i < readableSocketCount; i++)
                 {
@@ -457,15 +455,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         int socketIndex = i; // assumes in-order events
                         TSocket socket = readableSockets[socketIndex];
                         (int received, int advanced, int iovLength) = UnpackReceiveState(aioEvent->Data);
-                        (bool done, Exception retval) = socket.InterpretReceiveResult(result, ref received, advanced, (IOVector*)aioEvent->AioCb->Buffer, iovLength);
-                        if (done || (retval == TransportConstants.EAgainSentinel && advanced == 0))
+                        (bool done, PosixResult retval) = socket.InterpretReceiveResult(result, ref received, advanced, (IOVector*)aioEvent->AioCb->Buffer, iovLength);
+                        if (done)
                         {
                             receiveResults[socketIndex] = retval;
                             socketsRemaining--;
                             aioEvent->AioCb->OpCode = AioOpCode.Noop;
                             allEAgain = false;
                         }
-                        else if (retval != TransportConstants.EAgainSentinel)
+                        else if (retval != PosixResult.EAGAIN)
                         {
                             aioEvent->AioCb->Data = PackReceiveState(received, advanced, iovLength);
                             allEAgain = false;
@@ -510,9 +508,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 for (int i = 0; i < readableSockets.Count; i++)
                 {
-                    Exception receiveResult = receiveResults[i];
-                    receiveResults[i] = null;
-                    readableSockets[i].OnReceiveFromSocket(receiveResult);
+                    readableSockets[i].OnReceiveFromSocket(receiveResults[i]);
                 }
                 readableSockets.Clear();
             }

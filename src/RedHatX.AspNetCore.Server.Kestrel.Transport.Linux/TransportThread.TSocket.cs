@@ -158,7 +158,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (completeReadable)
                 {
-                    OnReceiveFromSocket(_inputCompleteError);
+                    CompleteInput(_inputCompleteError);
                 }
             }
 
@@ -267,7 +267,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     end = buffer.GetPosition(result.Value);
                 }
-                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                else if (result == PosixResult.EAGAIN)
                 {
                     Output.AdvanceTo(buffer.Start);
                     WaitSocketWritable();
@@ -474,7 +474,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                        Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, maxLength);
             }
 
-            public unsafe Exception Receive(int availableBytes)
+            public unsafe PosixResult Receive(int availableBytes)
             {
                 int ioVectorLength = CalcIOVectorLengthForReceive(availableBytes, MaxIOVectorReceiveLength);
                 var ioVectors = stackalloc IOVector[ioVectorLength];
@@ -492,21 +492,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 do
                 {
                     var result = SocketInterop.Receive(Fd, ioVectors, ioVectorLength);
-                    (bool done, Exception retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, ioVectorLength);
+                    (bool done, PosixResult retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, ioVectorLength);
                     if (done)
                     {
                         return retval;
                     }
-                    else if (retval == TransportConstants.EAgainSentinel)
+                    else if (retval == PosixResult.EAGAIN)
                     {
-                        if (availableBytes == 0)
-                        {
-                            return TransportConstants.EAgainSentinel;
-                        }
                         eAgainCount++;
                         if (eAgainCount == TransportConstants.MaxEAgainCount)
                         {
-                            return new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
+                            return TransportConstants.TooManyEAgain;
                         }
                     }
                     else
@@ -517,7 +513,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe (bool done, Exception receiveResult) InterpretReceiveResult(PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
+            public unsafe (bool done, PosixResult receiveResult) InterpretReceiveResult(PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
             {
                 PipeWriter writer = Input;
                 if (result.IsSuccess)
@@ -527,7 +523,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         // We made it!
                         writer.Advance(received - advanced);
-                        return (true, received == 0 ? TransportConstants.EofSentinel : null);
+                        return (true, new PosixResult(received == 0 ? 0 : 1));
                     }
                     // Update ioVectors to match bytes read
                     var skip = result.Value;
@@ -539,19 +535,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
                         skip -= skipped;
                     }
-                    return (false, null);
+                    return (false, new PosixResult(1));
                 }
-                else if (result == PosixResult.EAGAIN || result == PosixResult.EWOULDBLOCK)
+                else if (result == PosixResult.EAGAIN)
                 {
-                    return (false, TransportConstants.EAgainSentinel);
+                    return (advanced == 0, result);
                 }
                 else if (result == PosixResult.ECONNRESET)
                 {
-                    return (true, new ConnectionResetException(result.ErrorDescription(), result.AsException()));
+                    return (true, result);
                 }
                 else
                 {
-                    return (true, result.AsException());
+                    return (true, result);
                 }
             }
 
@@ -568,28 +564,45 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (stopped)
                 {
-                    OnReceiveFromSocket(_inputCompleteError);
+                    CompleteInput(_inputCompleteError);
                 }
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void OnReceiveFromSocket(Exception result)
+            public void OnReceiveFromSocket(PosixResult result)
             {
-                if (result == null)
+                if (result.Value == 0)
                 {
+                    // EOF
+                    CompleteInput(null);
+                }
+                else if (result.IsSuccess)
+                {
+                    // Data received
                     FlushToApp();
                 }
-                else if (result == TransportConstants.EAgainSentinel)
+                else if (result == PosixResult.EAGAIN)
                 {
+                    // EAGAIN
                     ReceiveFromSocket();
-                }
-                else if (result == TransportConstants.EofSentinel)
-                {
-                    CompleteInput(null);
                 }
                 else
                 {
-                    CompleteInput(result);
+                    // Error
+                    Exception error;
+                    if (result == PosixResult.ECONNRESET)
+                    {
+                        error = new ConnectionResetException(result.ErrorDescription(), result.AsException());
+                    }
+                    else if (result == TransportConstants.TooManyEAgain)
+                    {
+                        error = new NotSupportedException("Too many EAGAIN, unable to receive available bytes.");
+                    }
+                    else
+                    {
+                        error = result.AsException();
+                    }
+                    CompleteInput(error);
                 }
             }
 
