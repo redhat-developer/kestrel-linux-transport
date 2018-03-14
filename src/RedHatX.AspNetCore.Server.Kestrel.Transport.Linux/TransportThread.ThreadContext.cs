@@ -408,8 +408,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             private unsafe void AioReceive(List<TSocket> readableSockets)
             {
+                long PackReceiveState(int received, int advanced, int iovLength) => ((long)received << 32) + (advanced << 8) + (iovLength);
+                (int received, int advanced, int iovLength) UnpackReceiveState(long data) => ((int)(data >> 32), (int)((data >> 8) & 0xffffff), (int)(data & 0xff));
+
                 int readableSocketCount = readableSockets.Count;
-                AioReceiveState* receiveStates = stackalloc AioReceiveState[readableSocketCount];
                 AioCb* aioCb = AioCbs;
                 IOVector* ioVectors = IoVectorTable;
                 Exception[] receiveResults = _aioResults; // TODO: try to get rid of this array
@@ -420,10 +422,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
                     int ioVectorLength = socket.CalcIOVectorLengthForReceive(availableBytes, IoVectorsPerAioSocket);
                     int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
-                    receiveStates[i] = new AioReceiveState { Received = 0, Advanced = advanced, IoVectorLength = ioVectorLength };
 
                     aioCb->Fd = socket.Fd;
-                    aioCb->Data = i;
+                    aioCb->Data = PackReceiveState(0, advanced, ioVectorLength);
                     aioCb->OpCode = AioOpCode.PReadv;
                     aioCb->Buffer = ioVectors;
                     aioCb->Length = ioVectorLength;
@@ -455,9 +456,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         PosixResult result = aioEvent->Result;
                         int socketIndex = i; // assumes in-order events
                         TSocket socket = readableSockets[socketIndex];
-                        ref AioReceiveState receiveState = ref receiveStates[socketIndex];
-                        (bool done, Exception retval) = socket.InterpretReceiveResult(result, ref receiveState.Received, receiveState.Advanced, (IOVector*)aioEvent->AioCb->Buffer, receiveState.IoVectorLength);
-                        if (done || (retval == TransportConstants.EAgainSentinel && receiveState.Advanced == 0))
+                        (int received, int advanced, int iovLength) = UnpackReceiveState(aioEvent->Data);
+                        (bool done, Exception retval) = socket.InterpretReceiveResult(result, ref received, advanced, (IOVector*)aioEvent->AioCb->Buffer, iovLength);
+                        if (done || (retval == TransportConstants.EAgainSentinel && advanced == 0))
                         {
                             receiveResults[socketIndex] = retval;
                             socketsRemaining--;
@@ -466,6 +467,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         else if (retval != TransportConstants.EAgainSentinel)
                         {
+                            aioEvent->AioCb->Data = PackReceiveState(received, advanced, iovLength);
                             allEAgain = false;
                         }
                         aioEvent++;
@@ -938,13 +940,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             internal static MemoryPool<byte> CreateMemoryPool()
             {
                 return KestrelMemoryPool.Create();
-            }
-
-            struct AioReceiveState
-            {
-                public int Received;
-                public int Advanced;
-                public int IoVectorLength;
             }
 
             private class CallbackAdapter<T>
