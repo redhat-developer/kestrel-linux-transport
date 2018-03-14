@@ -16,11 +16,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     {
         sealed class ThreadContext : PipeScheduler, IDisposable
         {
-            public static readonly IPAddress NotIPSocket = IPAddress.None;
+            private static readonly IPAddress NotIPSocket = IPAddress.None;
             private const int IoVectorsPerAioSocket = 8;
-            // 128 IOVectors, take up 2KB of stack, can send up to 512KB
             private const int ListenBacklog = 128;
-            internal const int EventBufferLength = 512;
+            private  const int EventBufferLength = 512;
             private const int EPollBlocked = 1;
             private const int EPollNotBlocked = 0;
             private const byte PipeStopThread = 0;
@@ -28,14 +27,49 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private const byte PipeStopSockets = 2;
             private const int MemoryAlignment = 8;
 
+            private readonly int _epollFd;
+            private readonly EPoll _epoll;
+
+            private readonly TransportThread _transportThread;
+            private readonly LinuxTransportOptions _transportOptions;
+            private readonly ILogger _logger;
+            private readonly IConnectionHandler _connectionHandler;
+            // key is the file descriptor
+            private readonly Dictionary<int, TSocket> _sockets;
+            private readonly List<TSocket> _acceptSockets;
+
+            private PipeEndPair _pipeEnds;
+            private int _epollState;
+
+            private readonly object _schedulerGate = new object();
+            private Queue<ScheduledAction> _schedulerAdding;
+            private Queue<ScheduledAction> _schedulerRunning;
+            private List<ScheduledSend> _scheduledSendAdding;
+            private List<ScheduledSend> _scheduledSendRunning;
+
+            private readonly IntPtr _aioEventsMemory;
+            private readonly IntPtr _aioCbsMemory;
+            private readonly IntPtr _aioCbsTableMemory;
+            private readonly IntPtr _ioVectorTableMemory;
+            private readonly IntPtr _aioContext;
+            private readonly Exception[] _aioResults;
+            private readonly ReadOnlySequence<byte>[] _aioSendBuffers;
+
+            public readonly MemoryPool<byte> MemoryPool;
+
+            private unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
+            private unsafe AioCb* AioCbs => (AioCb*)Align(_aioCbsMemory);
+            private unsafe AioCb** AioCbsTable => (AioCb**)Align(_aioCbsTableMemory);
+            private unsafe IOVector* IoVectorTable => (IOVector*)Align(_ioVectorTableMemory);
+
+
             public unsafe ThreadContext(TransportThread transportThread)
             {
-                TransportThread = transportThread;
-                ConnectionHandler = transportThread.ConnectionHandler;
-
-                Sockets = new Dictionary<int, TSocket>();
-                Logger = TransportThread.LoggerFactory.CreateLogger($"{nameof(TransportThread)}.{TransportThread.ThreadId}"); ;
-                AcceptSockets = new List<TSocket>();
+                _transportThread = transportThread;
+                _connectionHandler = transportThread.ConnectionHandler;
+                _sockets = new Dictionary<int, TSocket>();
+                _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(_transportThread)}.{_transportThread.ThreadId}"); ;
+                _acceptSockets = new List<TSocket>();
                 _transportOptions = transportThread.TransportOptions;
                 _schedulerAdding = new Queue<ScheduledAction>(1024);
                 _schedulerRunning = new Queue<ScheduledAction>(1024);
@@ -52,21 +86,21 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         AioCbsTable[i] = &AioCbs[i];
                     }
-                    AioResults = new Exception[EventBufferLength];
+                    _aioResults = new Exception[EventBufferLength];
                     if (_transportOptions.AioSend)
                     {
-                        SendBuffers = new ReadOnlySequence<byte>[EventBufferLength];
+                        _aioSendBuffers = new ReadOnlySequence<byte>[EventBufferLength];
                     }
                 }
 
                 // These members need to be Disposed
-                EPoll = EPoll.Create();
-                EPollFd = EPoll.DangerousGetHandle().ToInt32();
+                _epoll = EPoll.Create();
+                _epollFd = _epoll.DangerousGetHandle().ToInt32();
                 MemoryPool = CreateMemoryPool();
-                PipeEnds = PipeEnd.CreatePair(blocking: false);
+                _pipeEnds = PipeEnd.CreatePair(blocking: false);
                 if (_aioEventsMemory != IntPtr.Zero)
                 {
-                    AioInterop.IoSetup(EventBufferLength, out AioContext).ThrowOnError();
+                    AioInterop.IoSetup(EventBufferLength, out _aioContext).ThrowOnError();
                 }
             }
 
@@ -85,11 +119,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     if (_transportOptions.ReceiveOnIncomingCpu)
                     {
-                        if (TransportThread.CpuId != -1)
+                        if (_transportThread.CpuId != -1)
                         {
-                            if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, TransportThread.CpuId))
+                            if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, _transportThread.CpuId))
                             {
-                                Logger.LogWarning($"Cannot enable nameof{SocketOptionName.IncomingCpu} for {endPoint}");
+                                _logger.LogWarning($"Cannot enable nameof{SocketOptionName.IncomingCpu} for {endPoint}");
                             }
                         }
                     }
@@ -134,36 +168,37 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe void Run()
             {
                 // register pipe 
-                int pipeKey = PipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
-                EPollInterop.EPollControl(EPollFd,
+                int pipeKey = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
+                EPollInterop.EPollControl(_epollFd,
                                         EPollOperation.Add,
-                                        PipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
+                                        _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
                                         EPollEvents.Readable,
                                         EPollData(pipeKey));
 
-                Socket acceptSocket;
-                SocketFlags flags;
-                int zeroCopyThreshold;
-                if (TransportThread.AcceptThread != null)
+                // create accept socket
                 {
-                    flags = SocketFlags.TypePassFd;
-                    acceptSocket = TransportThread.AcceptThread.CreateReceiveSocket();
-                    zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                    Socket acceptSocket;
+                    SocketFlags flags;
+                    int zeroCopyThreshold;
+                    if (_transportThread.AcceptThread != null)
+                    {
+                        flags = SocketFlags.TypePassFd;
+                        acceptSocket = _transportThread.AcceptThread.CreateReceiveSocket();
+                        zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                    }
+                    else
+                    {
+                        flags = SocketFlags.TypeAccept;
+                        acceptSocket = CreateAcceptSocket(_transportThread.EndPoint, ref flags, out zeroCopyThreshold);
+                    }
+                    if (_transportOptions.DeferSend)
+                    {
+                        flags |= SocketFlags.DeferSend;
+                    }
+                    // accept connections
+                    AcceptOn(acceptSocket, flags, zeroCopyThreshold); // TODO: what happens when AcceptOn fails?
                 }
-                else
-                {
-                    flags = SocketFlags.TypeAccept;
-                    acceptSocket = CreateAcceptSocket(TransportThread.EndPoint, ref flags, out zeroCopyThreshold);
-                }
-                if (_transportOptions.DeferSend)
-                {
-                    flags |= SocketFlags.DeferSend;
-                }
-                // accept connections
-                AcceptOn(acceptSocket, flags, zeroCopyThreshold);
 
-                int epollFd = EPollFd;
-                var readEnd = PipeEnds.ReadEnd;
                 int notPacked = !EPoll.PackedEvents ? 1 : 0;
                 var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
                 int statReadEvents = 0;
@@ -172,10 +207,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 int statAccepts = 0;
                 int statZeroCopySuccess = 0;
                 int statZeroCopyCopied = 0;
-                var sockets = Sockets;
-                bool checkAvailable = _transportOptions.CheckAvailable;
-                bool aioReceive = _transportOptions.AioReceive;
-                bool aioSend = _transportOptions.AioSend;
 
                 var acceptableSockets = new List<TSocket>(1);
                 var readableSockets = new List<TSocket>(EventBufferLength);
@@ -188,7 +219,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 bool running = true;
                 do
                 {
-                    int numEvents = EPollInterop.EPollWait(epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
+                    int numEvents = EPollInterop.EPollWait(_epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
 
                     // actions can be scheduled without unblocking epoll
                     SetEpollNotBlocked();
@@ -202,7 +233,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
                     // - this also improves cache/cpu locality of the lookup
                     int* ptr = buffer;
-                    lock (sockets)
+                    lock (_sockets)
                     {
                         for (int i = 0; i < numEvents; i++)
                         {
@@ -217,7 +248,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             int key = ptr[2];
                             ptr += 3 + notPacked;
                             TSocket tsocket;
-                            if (sockets.TryGetValue(key, out tsocket))
+                            if (_sockets.TryGetValue(key, out tsocket))
                             {
                                 var type = tsocket.Type;
                                 if (type == SocketFlags.TypeClient)
@@ -318,8 +349,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                     // handle reads
                     statReadEvents += readableSockets.Count;
-                    if (!aioReceive)
+                    if (!_transportOptions.AioReceive)
                     {
+                        bool checkAvailable = _transportOptions.CheckAvailable;
                         for (int i = 0; i < readableSockets.Count; i++)
                         {
                             TSocket socket = readableSockets[i];
@@ -353,10 +385,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         PosixResult result;
                         do
                         {
-                            result = readEnd.TryReadByte();
+                            result = _pipeEnds.ReadEnd.TryReadByte();
                             if (result.Value == PipeStopSockets)
                             {
-                                StopSockets(Sockets);
+                                StopSockets();
                             }
                             else if (result.Value == PipeStopThread)
                             {
@@ -367,11 +399,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
 
                     // scheduled work
-                    DoScheduledWork(aioSend);
+                    DoScheduledWork(_transportOptions.AioSend);
 
                 } while (running);
 
-                Logger.LogInformation($"Thread {TransportThread.ThreadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
+                _logger.LogInformation($"Thread {_transportThread.ThreadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
             }
 
             private unsafe void AioReceive(List<TSocket> readableSockets)
@@ -381,10 +413,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 AioCb* aioCbs = AioCbs;
                 AioCb** aioCbsTable = AioCbsTable;
                 IOVector* ioVectorTable = IoVectorTable;
-                IntPtr ctxp = AioContext;
+                IntPtr ctxp = _aioContext;
                 AioReceiveState* receiveStates = stackalloc AioReceiveState[readableSocketCount];
                 IOVector* ioVectors = ioVectorTable;
-                Exception[] receiveResults = AioResults;
+                Exception[] receiveResults = _aioResults;
                 for (int i = 0; i < readableSocketCount; i++)
                 {
                     TSocket socket = readableSockets[i];
@@ -479,12 +511,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 readableSockets.Clear();
             }
 
-            private static void StopSockets(Dictionary<int, TSocket> sockets)
+            private void StopSockets()
             {
                 Dictionary<int, TSocket> clone;
-                lock (sockets)
+                lock (_sockets)
                 {
-                    clone = new Dictionary<int, TSocket>(sockets);
+                    clone = new Dictionary<int, TSocket>(_sockets);
                 }
                 foreach (var kv in clone)
                 {
@@ -563,12 +595,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         return 0;
                     }
 
-                    ConnectionHandler.OnConnection(tsocket);
+                    _connectionHandler.OnConnection(tsocket);
 
-                    var sockets = Sockets;
-                    lock (sockets)
+                    lock (_sockets)
                     {
-                        sockets.Add(fd, tsocket);
+                        _sockets.Add(fd, tsocket);
                     }
 
                     bool dataMayBeAvailable = tacceptSocket.IsDeferAccept;
@@ -587,20 +618,19 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 TSocket tsocket = null;
                 int fd = acceptSocket.DangerousGetHandle().ToInt32();
-                var sockets = Sockets;
                 try
                 {
                     tsocket = new TSocket(this, acceptSocket, fd, flags)
                     {
                         ZeroCopyThreshold = zeroCopyThreshold
                     };
-                    AcceptSockets.Add(tsocket);
-                    lock (sockets)
+                    _acceptSockets.Add(tsocket);
+                    lock (_sockets)
                     {
-                        sockets.Add(tsocket.Fd, tsocket);
+                        _sockets.Add(tsocket.Fd, tsocket);
                     }
 
-                    EPollInterop.EPollControl(EPollFd,
+                    EPollInterop.EPollControl(_epollFd,
                                               EPollOperation.Add,
                                               fd,
                                               EPollEvents.Readable,
@@ -609,10 +639,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 catch
                 {
                     acceptSocket.Dispose();
-                    AcceptSockets.Remove(tsocket);
-                    lock (sockets)
+                    _acceptSockets.Remove(tsocket);
+                    lock (_sockets)
                     {
-                        sockets.Remove(fd);
+                        _sockets.Remove(fd);
                     }
                     throw;
                 }
@@ -625,38 +655,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 span.Clear();
                 return res;
             }
-
-            public int EPollFd;
-            private readonly LinuxTransportOptions _transportOptions;
-            public readonly ILogger Logger;
-            public readonly IConnectionHandler ConnectionHandler;
-            public PipeEndPair PipeEnds;
-
-            public readonly TransportThread TransportThread;
-            // key is the file descriptor
-            public readonly Dictionary<int, TSocket> Sockets;
-            public MemoryPool<byte> MemoryPool;
-            public readonly List<TSocket> AcceptSockets;
-
-            private EPoll EPoll;
-            private int _epollState;
-            private readonly object _schedulerGate = new object();
-            private Queue<ScheduledAction> _schedulerAdding;
-            private Queue<ScheduledAction> _schedulerRunning;
-            private List<ScheduledSend> _scheduledSendAdding;
-            private List<ScheduledSend> _scheduledSendRunning;
-
-            private IntPtr _aioEventsMemory;
-            public unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
-            private IntPtr _aioCbsMemory;
-            public unsafe AioCb* AioCbs => (AioCb*)Align(_aioCbsMemory);
-            private IntPtr _aioCbsTableMemory;
-            public unsafe AioCb** AioCbsTable => (AioCb**)Align(_aioCbsTableMemory);
-            private IntPtr _ioVectorTableMemory;
-            public unsafe IOVector* IoVectorTable => (IOVector*)Align(_ioVectorTableMemory);
-            public IntPtr AioContext;
-            public Exception[] AioResults;
-            public ReadOnlySequence<byte>[] SendBuffers;
 
             private unsafe void* Align(IntPtr p)
             {
@@ -682,7 +680,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (epollState == EPollBlocked)
                 {
-                    PipeEnds.WriteEnd.WriteByte(PipeActionsPending);
+                    _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
                 }
             }
 
@@ -697,7 +695,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (epollState == EPollBlocked)
                 {
-                    PipeEnds.WriteEnd.WriteByte(PipeActionsPending);
+                    _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
                 }
             }
 
@@ -739,7 +737,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (unblockEPoll)
                 {
-                    PipeEnds.WriteEnd.WriteByte(PipeActionsPending);
+                    _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
                 }
             }
 
@@ -747,15 +745,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 (this as PipeScheduler).Schedule<object>(_ =>
                 {
-                    this.CloseAccept(Sockets);
+                    this.CloseAccept(_sockets);
                 }, null);
             }
 
-            public void StopSockets()
+            public void RequestStopSockets()
             {
                 try
                 {
-                    PipeEnds.WriteEnd.WriteByte(PipeStopSockets);
+                    _pipeEnds.WriteEnd.WriteByte(PipeStopSockets);
                 }
                 // All sockets stopped already and the PipeEnd was disposed
                 catch (IOException ex) when (ex.HResult == PosixResult.EPIPE)
@@ -766,55 +764,49 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void Dispose()
             {
-                EPoll?.Dispose();
-                PipeEnds.Dispose();
+                _epoll?.Dispose();
+                _pipeEnds.Dispose();
                 MemoryPool?.Dispose();
                 if (_aioEventsMemory != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(_aioEventsMemory);
-                    _aioEventsMemory = IntPtr.Zero;
                 }
                 if (_aioCbsMemory != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(_aioCbsMemory);
-                    _aioCbsMemory = IntPtr.Zero;
                 }
                 if (_aioCbsTableMemory != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(_aioCbsTableMemory);
-                    _aioCbsTableMemory = IntPtr.Zero;
                 }
                 if (_ioVectorTableMemory != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(_ioVectorTableMemory);
-                    _ioVectorTableMemory = IntPtr.Zero;
                 }
-                if (AioContext != IntPtr.Zero)
+                if (_aioContext != IntPtr.Zero)
                 {
-                    AioInterop.IoDestroy(AioContext);
-                    AioContext = IntPtr.Zero;
+                    AioInterop.IoDestroy(_aioContext);
                 }
             }
 
             public void RemoveSocket(int tsocketKey)
             {
-                var sockets = Sockets;
+                var sockets = _sockets;
                 lock (sockets)
                 {
                     var initialCount = sockets.Count;
                     sockets.Remove(tsocketKey);
                     if (sockets.Count == 0)
                     {
-                        PipeEnds.WriteEnd.WriteByte(PipeStopThread);
+                        _pipeEnds.WriteEnd.WriteByte(PipeStopThread);
                     }
                 }
             }
 
             private void CompleteStateChange(TransportThreadState state)
             {
-                TransportThread.CompleteStateChange(state);
+                _transportThread.CompleteStateChange(state);
             }
-
 
             private unsafe void AioSend(List<ScheduledSend> sendQueue)
             {
@@ -824,7 +816,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     int completedCount = 0;
                     AioCb* aioCbs = AioCbs;
                     IOVector* ioVectors = IoVectorTable;
-                    ReadOnlySequence<byte>[] sendBuffers = SendBuffers;
+                    ReadOnlySequence<byte>[] sendBuffers = _aioSendBuffers;
                     for (int i = 0; i < sendQueue.Count; i++)
                     {
                         TSocket socket = sendQueue[i].Socket;
@@ -859,7 +851,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     if (sendCount > 0)
                     {
-                        IntPtr ctxp = AioContext;
+                        IntPtr ctxp = _aioContext;
                         PosixResult res = AioInterop.IoSubmit(ctxp, sendCount, AioCbsTable);
                         if (res != sendCount)
                         {
@@ -867,7 +859,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
 
                         AioEvent* aioEvents = AioEvents;
-                        AioInterop.IoGetEvents(ctxp, sendCount, sendCount, aioEvents, -1);
+                        AioInterop.IoGetEvents(ctxp, sendCount, sendCount, aioEvents, -1); // TODO user-space completion
                         if (res != sendCount)
                         {
                             throw new NotSupportedException("Unexpected IoGetEvents Send retval " + res);
@@ -909,7 +901,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             private void CloseAccept(Dictionary<int, TSocket> sockets)
             {
-                var acceptSockets = AcceptSockets;
+                var acceptSockets = _acceptSockets;
                 lock (sockets)
                 {
                     for (int i = 0; i < acceptSockets.Count; i++)
@@ -930,7 +922,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public void UpdateEPollControl(TSocket tsocket, EPollEvents flags, bool registered)
             {
                 flags &= EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error;
-                EPollInterop.EPollControl(EPollFd,
+                EPollInterop.EPollControl(_epollFd,
                             registered ? EPollOperation.Modify : EPollOperation.Add,
                             tsocket.Fd,
                             flags | EPollEvents.OneShot,
@@ -951,8 +943,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 public int IoVectorLength;
             }
 
-
-
             private class CallbackAdapter<T>
             {
                 public static readonly Action<object, object> PostCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
@@ -970,7 +960,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 public TSocket Socket;
             }
-
         }
     }
 }
