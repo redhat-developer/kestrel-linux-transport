@@ -469,7 +469,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
 
                     AioEvent* aioEvents = AioEvents;
-                    AioInterop.IoGetEvents(ctxp, readableSocketCount, readableSocketCount, aioEvents, -1);
+                    res = AioInterop.IoGetEvents(ctxp, readableSocketCount, readableSocketCount, aioEvents, -1);
                     if (res != readableSocketCount)
                     {
                         throw new NotSupportedException("Unexpected IoGetEvents retval " + res);
@@ -859,7 +859,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
 
                         AioEvent* aioEvents = AioEvents;
-                        AioInterop.IoGetEvents(ctxp, sendCount, sendCount, aioEvents, -1); // TODO user-space completion
+                        res = AioInterop.IoGetEvents(ctxp, sendCount, sendCount, aioEvents, -1); // TODO user-space completion
                         if (res != sendCount)
                         {
                             throw new NotSupportedException("Unexpected IoGetEvents Send retval " + res);
