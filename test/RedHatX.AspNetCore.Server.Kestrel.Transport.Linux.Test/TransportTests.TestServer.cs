@@ -22,6 +22,7 @@ namespace Tests
         public bool CheckAvailable { get; set; } = true;
         public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
         public string UnixSocketPath { get; set; }
+        public IPEndPoint IPEndPoint { get; set; }
     }
 
     class TestServer : IConnectionHandler, IDisposable
@@ -67,7 +68,7 @@ namespace Tests
             }
             else
             {
-                _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
+                _serverAddress = options.IPEndPoint ?? new IPEndPoint(IPAddress.Loopback, 0);
                 endPoint = new EndPointInfo
                 {
                     Type = ListenType.IPEndPoint,

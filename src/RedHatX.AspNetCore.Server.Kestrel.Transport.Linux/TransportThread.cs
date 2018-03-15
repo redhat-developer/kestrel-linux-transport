@@ -185,32 +185,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private unsafe void PollThread(object obj)
         {
-            try
+            if (CpuId != -1)
             {
-                // .NET doesn't support setting thread affinity on Start
-                // We could change it before starting the thread
-                // so it gets inherited, but we don't know how many threads
-                // the runtime may start.
-                if (CpuId != -1)
-                {
-                    SystemScheduler.SetCurrentThreadAffinity(CpuId);
-                }
+                SystemScheduler.SetCurrentThreadAffinity(CpuId);
+            }
 
-                using (ThreadContext context = new ThreadContext(this))
-                {
-                    _threadContext = context;
-                    context.Run();
-                }
-            }
-            catch (Exception ex)
+            using (ThreadContext context = new ThreadContext(this))
             {
-                Console.WriteLine(ex.Message);
-                Console.WriteLine(ex.StackTrace);
-                Environment.FailFast("TransportThread", ex);
-            }
-            finally
-            {
-                CompleteStateChange(TransportThreadState.Stopped);
+                _threadContext = context;
+                context.Run();
             }
         }
 
@@ -219,7 +202,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             throw new InvalidOperationException($"nameof(TransportThread) is {_state}");
         }
 
-        private void CompleteStateChange(TransportThreadState state)
+        private void CompleteStateChange(TransportThreadState state, Exception error)
         {
             TaskCompletionSource<object> tcs;
             lock (_gate)
@@ -230,7 +213,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             ThreadPool.QueueUserWorkItem(o =>
             {
-                tcs?.SetResult(null);
+                if (error != null)
+                {
+                    tcs?.SetException(error);
+                }
+                else
+                {
+                    tcs?.SetResult(null);
+                }
             });
         }
     }

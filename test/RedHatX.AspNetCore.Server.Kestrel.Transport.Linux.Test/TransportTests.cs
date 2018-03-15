@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.IO.Pipelines;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -382,6 +383,17 @@ namespace Tests
                 Assert.NotEqual(threadIds[0], threadIds[1]);
                 Assert.Equal(threadIds[0], threadIds[2]);
                 Assert.Equal(threadIds[1], threadIds[3]);
+            }
+        }
+
+        [Fact]
+        public async Task FailedBindThrows()
+        {
+            int port = 50;
+            using (var testServer = new TestServer(new TestServerOptions()
+                                        { IPEndPoint = new IPEndPoint(IPAddress.Loopback, port) }))
+            {
+                await Assert.ThrowsAnyAsync<Exception>(() => testServer.BindAsync());
             }
         }
 

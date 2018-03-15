@@ -163,15 +163,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            public unsafe void Run()
+            private int PipeKey => _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
+
+            private void Start()
             {
-                // register pipe 
-                int pipeKey = _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32();
+                // register pipe
                 EPollInterop.EPollControl(_epollFd,
                                         EPollOperation.Add,
                                         _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
                                         EPollEvents.Readable,
-                                        EPollData(pipeKey));
+                                        EPollData(PipeKey));
 
                 // create accept socket
                 {
@@ -194,214 +195,240 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         flags |= SocketFlags.DeferSend;
                     }
                     // accept connections
-                    AcceptOn(acceptSocket, flags, zeroCopyThreshold); // TODO: what happens when AcceptOn fails?
+                    AcceptOn(acceptSocket, flags, zeroCopyThreshold);
+                }
+            }
+
+            public unsafe void Run()
+            {
+                try
+                {
+                    Start();
+                    CompleteStateChange(TransportThreadState.Started);
+                }
+                catch (Exception e)
+                {
+                    CompleteStateChange(TransportThreadState.Stopped, e);
+                    return;
                 }
 
-                int notPacked = !EPoll.PackedEvents ? 1 : 0;
-                var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
-                int statReadEvents = 0;
-                int statWriteEvents = 0;
-                int statAcceptEvents = 0;
-                int statAccepts = 0;
-                int statZeroCopySuccess = 0;
-                int statZeroCopyCopied = 0;
-
-                var acceptableSockets = new List<TSocket>(1);
-                var readableSockets = new List<TSocket>(EventBufferLength);
-                var writableSockets = new List<TSocket>(EventBufferLength);
-                var reregisterEventSockets = new List<TSocket>(EventBufferLength);
-                var zeroCopyCompletions = new List<TSocket>(EventBufferLength);
-                bool pipeReadable = false;
-
-                CompleteStateChange(TransportThreadState.Started);
-                bool running = true;
-                do
+                try
                 {
-                    int numEvents = EPollInterop.EPollWait(_epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
+                    int notPacked = !EPoll.PackedEvents ? 1 : 0;
+                    var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
+                    int statReadEvents = 0;
+                    int statWriteEvents = 0;
+                    int statAcceptEvents = 0;
+                    int statAccepts = 0;
+                    int statZeroCopySuccess = 0;
+                    int statZeroCopyCopied = 0;
 
-                    // actions can be scheduled without unblocking epoll
-                    SetEpollNotBlocked();
+                    var acceptableSockets = new List<TSocket>(1);
+                    var readableSockets = new List<TSocket>(EventBufferLength);
+                    var writableSockets = new List<TSocket>(EventBufferLength);
+                    var reregisterEventSockets = new List<TSocket>(EventBufferLength);
+                    var zeroCopyCompletions = new List<TSocket>(EventBufferLength);
+                    bool pipeReadable = false;
 
-                    // check events
-                    // we don't handle them immediately:
-                    // - this ensures we don't mismatch a closed socket with a new socket that have the same fd
-                    //     ~ To have the same fd, the previous fd must be closed, which means it is removed from the epoll
-                    //     ~ and won't show up in our next call to epoll.Wait.
-                    //     ~ The old fd may be present in the buffer still, but lookup won't give a match, since it is removed
-                    //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
-                    // - this also improves cache/cpu locality of the lookup
-                    int* ptr = buffer;
-                    lock (_sockets)
+
+                    bool running = true;
+                    do
                     {
-                        for (int i = 0; i < numEvents; i++)
-                        {
-                            //   Packed             Non-Packed
-                            //   ------             ------
-                            // 0:Events       ==    Events
-                            // 1:Int1 = Key         [Padding]
-                            // 2:Int2 = Key   ==    Int1 = Key
-                            // 3:~~~~~~~~~~         Int2 = Key
-                            //                      ~~~~~~~~~~
-                            EPollEvents events = (EPollEvents)ptr[0];
-                            int key = ptr[2];
-                            ptr += 3 + notPacked;
-                            TSocket tsocket;
-                            if (_sockets.TryGetValue(key, out tsocket))
-                            {
-                                var type = tsocket.Type;
-                                if (type == SocketFlags.TypeClient)
-                                {
-                                    lock (tsocket.Gate)
-                                    {
-                                        var pendingEventState = tsocket.PendingEventState;
+                        int numEvents = EPollInterop.EPollWait(_epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
 
-                                        // zero copy
-                                        if ((pendingEventState & EPollEvents.Error & events) != EPollEvents.None)
+                        // actions can be scheduled without unblocking epoll
+                        SetEpollNotBlocked();
+
+                        // check events
+                        // we don't handle them immediately:
+                        // - this ensures we don't mismatch a closed socket with a new socket that have the same fd
+                        //     ~ To have the same fd, the previous fd must be closed, which means it is removed from the epoll
+                        //     ~ and won't show up in our next call to epoll.Wait.
+                        //     ~ The old fd may be present in the buffer still, but lookup won't give a match, since it is removed
+                        //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
+                        // - this also improves cache/cpu locality of the lookup
+                        int* ptr = buffer;
+                        lock (_sockets)
+                        {
+                            for (int i = 0; i < numEvents; i++)
+                            {
+                                //   Packed             Non-Packed
+                                //   ------             ------
+                                // 0:Events       ==    Events
+                                // 1:Int1 = Key         [Padding]
+                                // 2:Int2 = Key   ==    Int1 = Key
+                                // 3:~~~~~~~~~~         Int2 = Key
+                                //                      ~~~~~~~~~~
+                                EPollEvents events = (EPollEvents)ptr[0];
+                                int key = ptr[2];
+                                ptr += 3 + notPacked;
+                                TSocket tsocket;
+                                if (_sockets.TryGetValue(key, out tsocket))
+                                {
+                                    var type = tsocket.Type;
+                                    if (type == SocketFlags.TypeClient)
+                                    {
+                                        lock (tsocket.Gate)
                                         {
-                                            var copyResult = SocketInterop.CompleteZeroCopy(tsocket.Fd);
-                                            if (copyResult != PosixResult.EAGAIN)
+                                            var pendingEventState = tsocket.PendingEventState;
+
+                                            // zero copy
+                                            if ((pendingEventState & EPollEvents.Error & events) != EPollEvents.None)
                                             {
-                                                events &= ~EPollEvents.Error;
-                                                pendingEventState &= ~EPollEvents.Error;
-                                                zeroCopyCompletions.Add(tsocket);
-                                                if (copyResult == SocketInterop.ZeroCopyCopied)
+                                                var copyResult = SocketInterop.CompleteZeroCopy(tsocket.Fd);
+                                                if (copyResult != PosixResult.EAGAIN)
                                                 {
-                                                    tsocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
-                                                    statZeroCopyCopied++;
-                                                }
-                                                else if (copyResult == SocketInterop.ZeroCopySuccess)
-                                                {
-                                                    statZeroCopySuccess++;
-                                                }
-                                                else
-                                                {
-                                                    Environment.FailFast($"Error occurred while trying to complete zero copy: {copyResult}");
+                                                    events &= ~EPollEvents.Error;
+                                                    pendingEventState &= ~EPollEvents.Error;
+                                                    zeroCopyCompletions.Add(tsocket);
+                                                    if (copyResult == SocketInterop.ZeroCopyCopied)
+                                                    {
+                                                        tsocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                                                        statZeroCopyCopied++;
+                                                    }
+                                                    else if (copyResult == SocketInterop.ZeroCopySuccess)
+                                                    {
+                                                        statZeroCopySuccess++;
+                                                    }
+                                                    else
+                                                    {
+                                                        Environment.FailFast($"Error occurred while trying to complete zero copy: {copyResult}");
+                                                    }
                                                 }
                                             }
-                                        }
 
-                                        // treat Error as Readable, Writable
-                                        if ((events & EPollEvents.Error) != EPollEvents.None)
-                                        {
-                                            events |= EPollEvents.Readable | EPollEvents.Writable;
-                                        }
+                                            // treat Error as Readable, Writable
+                                            if ((events & EPollEvents.Error) != EPollEvents.None)
+                                            {
+                                                events |= EPollEvents.Readable | EPollEvents.Writable;
+                                            }
 
-                                        events &= pendingEventState & (EPollEvents.Readable | EPollEvents.Writable);
-                                        // readable
-                                        if ((events & EPollEvents.Readable) != EPollEvents.None)
-                                        {
-                                            readableSockets.Add(tsocket);
-                                            pendingEventState &= ~EPollEvents.Readable;
-                                        }
-                                        // writable
-                                        if ((events & EPollEvents.Writable) != EPollEvents.None)
-                                        {
-                                            writableSockets.Add(tsocket);
-                                            pendingEventState &= ~EPollEvents.Writable;
-                                        }
+                                            events &= pendingEventState & (EPollEvents.Readable | EPollEvents.Writable);
+                                            // readable
+                                            if ((events & EPollEvents.Readable) != EPollEvents.None)
+                                            {
+                                                readableSockets.Add(tsocket);
+                                                pendingEventState &= ~EPollEvents.Readable;
+                                            }
+                                            // writable
+                                            if ((events & EPollEvents.Writable) != EPollEvents.None)
+                                            {
+                                                writableSockets.Add(tsocket);
+                                                pendingEventState &= ~EPollEvents.Writable;
+                                            }
 
-                                        // reregister
-                                        tsocket.PendingEventState = pendingEventState;
-                                        if ((pendingEventState & (EPollEvents.Readable | EPollEvents.Writable)) != EPollEvents.None)
-                                        {
-                                            tsocket.PendingEventState |= TSocket.EventControlPending;
-                                            reregisterEventSockets.Add(tsocket);
+                                            // reregister
+                                            tsocket.PendingEventState = pendingEventState;
+                                            if ((pendingEventState & (EPollEvents.Readable | EPollEvents.Writable)) != EPollEvents.None)
+                                            {
+                                                tsocket.PendingEventState |= TSocket.EventControlPending;
+                                                reregisterEventSockets.Add(tsocket);
+                                            }
                                         }
                                     }
+                                    else
+                                    {
+                                        statAcceptEvents++;
+                                        acceptableSockets.Add(tsocket);
+                                    }
                                 }
-                                else
+                                else if (key == PipeKey)
                                 {
-                                    statAcceptEvents++;
-                                    acceptableSockets.Add(tsocket);
+                                    pipeReadable = true;
                                 }
                             }
-                            else if (key == pipeKey)
+                        }
+
+                        // zero copy
+                        for (int i = 0; i < zeroCopyCompletions.Count; i++)
+                        {
+                            zeroCopyCompletions[i].OnZeroCopyCompleted();
+                        }
+                        zeroCopyCompletions.Clear();
+
+                        // handle accepts
+                        statAcceptEvents += acceptableSockets.Count;
+                        for (int i = 0; i < acceptableSockets.Count; i++)
+                        {
+                            statAccepts += HandleAccept(acceptableSockets[i]);
+                        }
+                        acceptableSockets.Clear();
+
+                        // handle writes
+                        statWriteEvents += writableSockets.Count;
+                        for (int i = 0; i < writableSockets.Count; i++)
+                        {
+                            writableSockets[i].OnWritable(stopped: false);
+                        }
+                        writableSockets.Clear();
+
+                        // handle reads
+                        statReadEvents += readableSockets.Count;
+                        if (!_transportOptions.AioReceive)
+                        {
+                            bool checkAvailable = _transportOptions.CheckAvailable;
+                            for (int i = 0; i < readableSockets.Count; i++)
                             {
-                                pipeReadable = true;
+                                TSocket socket = readableSockets[i];
+                                int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
+                                var receiveResult = socket.Receive(availableBytes);
+                                socket.OnReceiveFromSocket(receiveResult);
+                            }
+                            readableSockets.Clear();
+                        }
+                        else if (readableSockets.Count > 0)
+                        {
+                            AioReceive(readableSockets);
+                        }
+
+                        // reregister for events
+                        for (int i = 0; i < reregisterEventSockets.Count; i++)
+                        {
+                            var tsocket = reregisterEventSockets[i];
+                            lock (tsocket.Gate)
+                            {
+                                var pendingEventState = tsocket.PendingEventState & ~TSocket.EventControlPending;
+                                tsocket.PendingEventState = pendingEventState;
+                                UpdateEPollControl(tsocket, pendingEventState, registered: true);
                             }
                         }
-                    }
+                        reregisterEventSockets.Clear();
 
-                    // zero copy
-                    for (int i = 0; i < zeroCopyCompletions.Count; i++)
-                    {
-                        zeroCopyCompletions[i].OnZeroCopyCompleted();
-                    }
-                    zeroCopyCompletions.Clear();
-
-                    // handle accepts
-                    statAcceptEvents += acceptableSockets.Count;
-                    for (int i = 0; i < acceptableSockets.Count; i++)
-                    {
-                        statAccepts += HandleAccept(acceptableSockets[i]);
-                    }
-                    acceptableSockets.Clear();
-
-                    // handle writes
-                    statWriteEvents += writableSockets.Count;
-                    for (int i = 0; i < writableSockets.Count; i++)
-                    {
-                        writableSockets[i].OnWritable(stopped: false);
-                    }
-                    writableSockets.Clear();
-
-                    // handle reads
-                    statReadEvents += readableSockets.Count;
-                    if (!_transportOptions.AioReceive)
-                    {
-                        bool checkAvailable = _transportOptions.CheckAvailable;
-                        for (int i = 0; i < readableSockets.Count; i++)
+                        // handle pipe
+                        if (pipeReadable)
                         {
-                            TSocket socket = readableSockets[i];
-                            int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
-                            var receiveResult = socket.Receive(availableBytes);
-                            socket.OnReceiveFromSocket(receiveResult);
-                        }
-                        readableSockets.Clear();
-                    }
-                    else if (readableSockets.Count > 0)
-                    {
-                        AioReceive(readableSockets);
-                    }
-
-                    // reregister for events
-                    for (int i = 0; i < reregisterEventSockets.Count; i++)
-                    {
-                        var tsocket = reregisterEventSockets[i];
-                        lock (tsocket.Gate)
-                        {
-                            var pendingEventState = tsocket.PendingEventState & ~TSocket.EventControlPending;
-                            tsocket.PendingEventState = pendingEventState;
-                            UpdateEPollControl(tsocket, pendingEventState, registered: true);
-                        }
-                    }
-                    reregisterEventSockets.Clear();
-
-                    // handle pipe
-                    if (pipeReadable)
-                    {
-                        PosixResult result;
-                        do
-                        {
-                            result = _pipeEnds.ReadEnd.TryReadByte();
-                            if (result.Value == PipeStopSockets)
+                            PosixResult result;
+                            do
                             {
-                                StopSockets();
-                            }
-                            else if (result.Value == PipeStopThread)
-                            {
-                                running = false;
-                            }
-                        } while (result);
-                        pipeReadable = false;
-                    }
+                                result = _pipeEnds.ReadEnd.TryReadByte();
+                                if (result.Value == PipeStopSockets)
+                                {
+                                    StopSockets();
+                                }
+                                else if (result.Value == PipeStopThread)
+                                {
+                                    running = false;
+                                }
+                            } while (result);
+                            pipeReadable = false;
+                        }
 
-                    // scheduled work
-                    DoScheduledWork(_transportOptions.AioSend);
+                        // scheduled work
+                        DoScheduledWork(_transportOptions.AioSend);
 
-                } while (running);
+                    } while (running);
 
-                _logger.LogInformation($"Thread {_transportThread.ThreadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
+                    _logger.LogInformation($"Thread {_transportThread.ThreadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
+
+                    CompleteStateChange(TransportThreadState.Stopped);
+
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex.Message);
+                    Console.WriteLine(ex.StackTrace);
+                    Environment.FailFast("TransportThread", ex);
+                }
             }
 
             private unsafe void AioReceive(List<TSocket> readableSockets)
@@ -805,9 +832,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private void CompleteStateChange(TransportThreadState state)
+            private void CompleteStateChange(TransportThreadState state, Exception error = null)
             {
-                _transportThread.CompleteStateChange(state);
+                _transportThread.CompleteStateChange(state, error);
             }
 
             private unsafe void AioSend(List<ScheduledSend> sendQueue)
@@ -935,6 +962,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             internal static MemoryPool<byte> CreateMemoryPool()
             {
+                // TODO: remove duplicate code
                 return KestrelMemoryPool.Create();
             }
 
