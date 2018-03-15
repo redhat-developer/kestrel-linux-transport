@@ -15,7 +15,7 @@ namespace Tests
 {
     public delegate void TestServerConnectionHandler(PipeReader input, PipeWriter output);
 
-    class TestServerOptions
+    public class TestServerOptions
     {
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
@@ -23,6 +23,8 @@ namespace Tests
         public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
         public string UnixSocketPath { get; set; }
         public IPEndPoint IPEndPoint { get; set; }
+        public bool AioSend { get; set; } = false;
+        public bool AioReceive { get; set; } = false;
     }
 
     class TestServer : IConnectionHandler, IDisposable
@@ -51,8 +53,8 @@ namespace Tests
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept,
                 CheckAvailable = options.CheckAvailable,
-                AioReceive = true, // TODO: add test
-                AioSend = true // TODO: add test
+                AioReceive = options.AioReceive,
+                AioSend = options.AioSend
             };
             var loggerFactory = new LoggerFactory();
             loggerFactory.AddConsole((n, l) => false);

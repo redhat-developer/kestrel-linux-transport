@@ -13,14 +13,26 @@ using Xunit;
 
 namespace Tests
 {
-    public class TransportTests
+    public abstract class TransportTestsBase
     {
+        protected abstract TestServerOptions CreateOptions();
+
+        private TestServer CreateTestServer(Action<TestServerOptions> configure = null)
+        {
+            TestServerOptions options = CreateOptions();
+            configure?.Invoke(options);
+            return new TestServer(options);
+        }
+
+        private TestServer CreateTestServer(TestServerConnectionHandler connectionHandler)
+            => CreateTestServer(options => options.ConnectionHandler = connectionHandler);
+
         [InlineData(true)]
         [InlineData(false)]
         [Theory]
         public async Task Echo_DeferAccept(bool deferAccept)
         {
-            using (var testServer = new TestServer(new TestServerOptions() { DeferAccept = deferAccept }))
+            using (var testServer = CreateTestServer(options => options.DeferAccept = deferAccept))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -42,7 +54,7 @@ namespace Tests
         [Theory]
         public async Task Echo_CheckAvailable(bool checkAvailable)
         {
-            using (var testServer = new TestServer(new TestServerOptions() { CheckAvailable = checkAvailable }))
+            using (var testServer = CreateTestServer(options => options.CheckAvailable = checkAvailable))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -62,7 +74,7 @@ namespace Tests
         [Fact]
         public async Task MultiThread()
         {
-            using (var testServer = new TestServer(new TestServerOptions() { ThreadCount = 2 }))
+            using (var testServer = CreateTestServer(options => options.ThreadCount = 2))
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
@@ -73,7 +85,7 @@ namespace Tests
         [Fact]
         public async Task Unbind()
         {
-            using (var testServer = new TestServer())
+            using (var testServer = CreateTestServer())
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
@@ -90,7 +102,8 @@ namespace Tests
             {
                 outputTcs.SetResult(output);
             };
-            using (var testServer = new TestServer(connectionHandler))
+
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
 
@@ -156,7 +169,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -215,7 +228,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -238,7 +251,7 @@ namespace Tests
                 inputCompletedTcs.SetResult(null);
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -275,7 +288,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(new TestServerOptions() { ConnectionHandler = connectionHandler}))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -310,7 +323,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -353,10 +366,10 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(new TestServerOptions()
-                                        { ConnectionHandler = connectionHandler,
-                                        ThreadCount = 2,
-                                        UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}" }))
+            using (var testServer = CreateTestServer(options =>
+                                        { options.ConnectionHandler = connectionHandler;
+                                          options.ThreadCount = 2;
+                                          options.UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}"; }))
             {
                 await testServer.BindAsync();
 
@@ -390,8 +403,8 @@ namespace Tests
         public async Task FailedBindThrows()
         {
             int port = 50;
-            using (var testServer = new TestServer(new TestServerOptions()
-                                        { IPEndPoint = new IPEndPoint(IPAddress.Loopback, port) }))
+            using (var testServer = CreateTestServer(options =>
+                                options.IPEndPoint = new IPEndPoint(IPAddress.Loopback, port)))
             {
                 await Assert.ThrowsAnyAsync<Exception>(() => testServer.BindAsync());
             }
@@ -489,5 +502,20 @@ namespace Tests
             }
             remainderRef = remainder;
         }
+    }
+
+    public sealed class DefaultOptionsTransportTests : TransportTestsBase
+    {
+        protected override TestServerOptions CreateOptions() => new TestServerOptions();
+    }
+
+    public sealed class AioTransportTests : TransportTestsBase
+    {
+        protected override TestServerOptions CreateOptions()
+            => new TestServerOptions()
+            {
+                AioReceive = true,
+                AioSend = true
+            };
     }
 }
