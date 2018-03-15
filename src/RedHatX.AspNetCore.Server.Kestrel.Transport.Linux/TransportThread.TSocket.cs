@@ -251,12 +251,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                     (PosixResult result, bool zeroCopyRegistered) = TrySend(zerocopy, ioVectors, ioVectorLength);
 
-                    return HandleReadResult(ref buffer, result, loop, zerocopy, zeroCopyRegistered);
+                    return HandleSendResult(ref buffer, result, loop, zerocopy, zeroCopyRegistered);
                 }
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool HandleReadResult(ref ReadOnlySequence<byte> buffer, PosixResult result, bool loop, bool zerocopy, bool zeroCopyRegistered)
+            public bool HandleSendResult(ref ReadOnlySequence<byte> buffer, PosixResult result, bool loop, bool zerocopy, bool zeroCopyRegistered)
             {
                 SequencePosition end;
                 if (result.Value == buffer.Length)

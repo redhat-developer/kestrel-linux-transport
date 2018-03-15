@@ -873,7 +873,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             TSocket socket = sendQueue[socketIndex].Socket;
                             ReadOnlySequence<byte> buffer = sendBuffers[i]; // assumes in-order events
                             sendBuffers[i] = default;
-                            socket.HandleReadResult(ref buffer, result, loop: false, zerocopy: false, zeroCopyRegistered: false);
+                            socket.HandleSendResult(ref buffer, result, loop: false, zerocopy: false, zeroCopyRegistered: false);
                             aioEvent++;
                         }
                     }
