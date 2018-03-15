@@ -14,7 +14,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 {
     sealed partial class TransportThread
     {
-        sealed class ThreadContext : PipeScheduler, IDisposable
+        sealed class ThreadContext : IDisposable
         {
             private static readonly IPAddress NotIPSocket = IPAddress.None;
             private const int IoVectorsPerAioSocket = 8;
@@ -25,6 +25,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private const byte PipeStopThread = 0;
             private const byte PipeActionsPending = 1;
             private const byte PipeStopSockets = 2;
+            private const byte PipeCloseAccept = 3;
             private const int MemoryAlignment = 8;
 
             private readonly int _epollFd;
@@ -42,8 +43,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private int _epollState;
 
             private readonly object _schedulerGate = new object();
-            private Queue<ScheduledAction> _schedulerAdding;
-            private Queue<ScheduledAction> _schedulerRunning;
             private List<ScheduledSend> _scheduledSendAdding;
             private List<ScheduledSend> _scheduledSendRunning;
 
@@ -70,8 +69,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(_transportThread)}.{_transportThread.ThreadId}"); ;
                 _acceptSockets = new List<TSocket>();
                 _transportOptions = transportThread.TransportOptions;
-                _schedulerAdding = new Queue<ScheduledAction>(1024);
-                _schedulerRunning = new Queue<ScheduledAction>(1024);
                 _scheduledSendAdding = new List<ScheduledSend>(1024);
                 _scheduledSendRunning = new List<ScheduledSend>(1024);
                 _epollState = EPollBlocked;
@@ -409,13 +406,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                                 {
                                     running = false;
                                 }
+                                else if (result.Value == PipeCloseAccept)
+                                {
+                                    CloseAccept();
+                                }
                             } while (result);
                             pipeReadable = false;
                         }
 
                         // scheduled work
+                        // note: this may write a byte to the pipe
                         DoScheduledWork(_transportOptions.AioSend);
-
                     } while (running);
 
                     _logger.LogInformation($"Thread {_transportThread.ThreadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
@@ -698,24 +699,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 Volatile.Write(ref _epollState, EPollNotBlocked);
             }
 
-            public override void Schedule<TState>(Action<TState> action, TState state)
-            {
-                // TODO: remove this function
-                int epollState;
-                lock (_schedulerGate)
-                {
-                    epollState = Interlocked.CompareExchange(ref _epollState, EPollNotBlocked, EPollBlocked);
-                    _schedulerAdding.Enqueue(new ScheduledAction { Callback = action, State = state, CallbackAdapter = CallbackAdapter<TState>.PostCallbackAdapter });
-                }
-                if (epollState == EPollBlocked)
-                {
-                    _pipeEnds.WriteEnd.WriteByte(PipeActionsPending);
-                }
-            }
-
             public void ScheduleSend(TSocket socket)
             {
-                // TODO: remove this function
                 int epollState;
                 lock (_schedulerGate)
                 {
@@ -730,14 +715,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void DoScheduledWork(bool aioSend)
             {
-                Queue<ScheduledAction> queue;
                 List<ScheduledSend> sendQueue;
                 lock (_schedulerGate)
                 {
-                    queue = _schedulerAdding;
-                    _schedulerAdding = _schedulerRunning;
-                    _schedulerRunning = queue;
-
                     sendQueue = _scheduledSendAdding;
                     _scheduledSendAdding = _scheduledSendRunning;
                     _scheduledSendRunning = sendQueue;
@@ -746,16 +726,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     PerformSends(sendQueue, aioSend);
                 }
-                while (queue.Count != 0)
-                {
-                    var scheduledAction = queue.Dequeue();
-                    scheduledAction.CallbackAdapter(scheduledAction.Callback, scheduledAction.State);
-                }
 
                 bool unblockEPoll = false;
                 lock (_schedulerGate)
                 {
-                    if (_schedulerAdding.Count > 0 || _scheduledSendAdding.Count > 0)
+                    if (_scheduledSendAdding.Count > 0)
                     {
                         unblockEPoll = true;
                     }
@@ -770,19 +745,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            public void CloseAccept()
-            {
-                (this as PipeScheduler).Schedule<object>(_ =>
-                {
-                    this.CloseAccept(_sockets);
-                }, null);
-            }
+            public void RequestCloseAccept() => TrySendToPipe(PipeCloseAccept);
 
-            public void RequestStopSockets()
+            public void RequestStopSockets() => TrySendToPipe(PipeStopSockets);
+
+            private void TrySendToPipe(byte operation)
             {
                 try
                 {
-                    _pipeEnds.WriteEnd.WriteByte(PipeStopSockets);
+                    _pipeEnds.WriteEnd.WriteByte(operation);
                 }
                 // All sockets stopped already and the PipeEnd was disposed
                 catch (IOException ex) when (ex.HResult == PosixResult.EPIPE)
@@ -911,7 +882,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-
             private unsafe void PerformSends(List<ScheduledSend> sendQueue, bool aioSend)
             {
                 if (aioSend)
@@ -928,10 +898,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private void CloseAccept(Dictionary<int, TSocket> sockets)
+            private void CloseAccept()
             {
                 var acceptSockets = _acceptSockets;
-                lock (sockets)
+                lock (_sockets)
                 {
                     for (int i = 0; i < acceptSockets.Count; i++)
                     {
@@ -964,19 +934,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 // TODO: remove duplicate code
                 return KestrelMemoryPool.Create();
-            }
-
-            private class CallbackAdapter<T>
-            {
-                public static readonly Action<object, object> PostCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
-                public static readonly Action<object, object> PostAsyncCallbackAdapter = (callback, state) => ((Action<T>)callback).Invoke((T)state);
-            }
-
-            private struct ScheduledAction
-            {
-                public Action<object, object> CallbackAdapter;
-                public object Callback;
-                public Object State;
             }
 
             private struct ScheduledSend

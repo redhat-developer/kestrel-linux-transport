@@ -134,7 +134,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
             if (triggerStateChange)
             {
-                _threadContext.CloseAccept();
+                _threadContext.RequestCloseAccept();
             }
             await tcs.Task;
         }
