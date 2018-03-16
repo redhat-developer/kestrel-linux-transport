@@ -15,13 +15,16 @@ namespace Tests
 {
     public delegate void TestServerConnectionHandler(PipeReader input, PipeWriter output);
 
-    class TestServerOptions
+    public class TestServerOptions
     {
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
         public bool CheckAvailable { get; set; } = true;
         public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
         public string UnixSocketPath { get; set; }
+        public IPEndPoint IPEndPoint { get; set; }
+        public bool AioSend { get; set; } = false;
+        public bool AioReceive { get; set; } = false;
     }
 
     class TestServer : IConnectionHandler, IDisposable
@@ -49,7 +52,9 @@ namespace Tests
             {
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept,
-                CheckAvailable = options.CheckAvailable
+                CheckAvailable = options.CheckAvailable,
+                AioReceive = options.AioReceive,
+                AioSend = options.AioSend
             };
             var loggerFactory = new LoggerFactory();
             loggerFactory.AddConsole((n, l) => false);
@@ -65,7 +70,7 @@ namespace Tests
             }
             else
             {
-                _serverAddress = new IPEndPoint(IPAddress.Loopback, 0);
+                _serverAddress = options.IPEndPoint ?? new IPEndPoint(IPAddress.Loopback, 0);
                 endPoint = new EndPointInfo
                 {
                     Type = ListenType.IPEndPoint,
@@ -94,17 +99,16 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public void OnConnection(IFeatureCollection features)
+        public void OnConnection(TransportConnection connection)
         {
-            var transportFeature = features.Get<IConnectionTransportFeature>();
-            var memoryPool = transportFeature.MemoryPool;
-            var input = new Pipe(GetInputPipeOptions(memoryPool, transportFeature.InputWriterScheduler));
-            var output = new Pipe(GetOutputPipeOptions(memoryPool, transportFeature.OutputReaderScheduler));
+            var memoryPool = connection.MemoryPool;
+            var input = new Pipe(GetInputPipeOptions(memoryPool, connection.InputWriterScheduler));
+            var output = new Pipe(GetOutputPipeOptions(memoryPool, connection.OutputReaderScheduler));
 
             _connectionHandler(input.Reader, output.Writer);
 
-            transportFeature.Transport = new DuplexPipe(input.Reader, output.Writer);
-            transportFeature.Application = new DuplexPipe(output.Reader, input.Writer);
+            connection.Transport = new DuplexPipe(input.Reader, output.Writer);
+            connection.Application = new DuplexPipe(output.Reader, input.Writer);
         }
 
         // copied from Kestrel

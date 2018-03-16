@@ -7,6 +7,7 @@ set(SOURCES
     scheduler.cpp
     io.cpp
     error.cpp
+    aio.cpp
 )
 
 add_library(RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Native

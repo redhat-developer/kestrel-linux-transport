@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.IO.Pipelines;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,14 +13,26 @@ using Xunit;
 
 namespace Tests
 {
-    public class TransportTests
+    public abstract class TransportTestsBase
     {
+        protected abstract TestServerOptions CreateOptions();
+
+        private TestServer CreateTestServer(Action<TestServerOptions> configure = null)
+        {
+            TestServerOptions options = CreateOptions();
+            configure?.Invoke(options);
+            return new TestServer(options);
+        }
+
+        private TestServer CreateTestServer(TestServerConnectionHandler connectionHandler)
+            => CreateTestServer(options => options.ConnectionHandler = connectionHandler);
+
         [InlineData(true)]
         [InlineData(false)]
         [Theory]
         public async Task Echo_DeferAccept(bool deferAccept)
         {
-            using (var testServer = new TestServer(new TestServerOptions() { DeferAccept = deferAccept }))
+            using (var testServer = CreateTestServer(options => options.DeferAccept = deferAccept))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -33,6 +46,7 @@ namespace Tests
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                     Assert.Equal(sendBuffer.Length, received);
                 }
+                await testServer.StopAsync();
             }
         }
 
@@ -41,7 +55,7 @@ namespace Tests
         [Theory]
         public async Task Echo_CheckAvailable(bool checkAvailable)
         {
-            using (var testServer = new TestServer(new TestServerOptions() { CheckAvailable = checkAvailable }))
+            using (var testServer = CreateTestServer(options => options.CheckAvailable = checkAvailable))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -55,13 +69,14 @@ namespace Tests
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                     Assert.Equal(sendBuffer.Length, received);
                 }
+                await testServer.StopAsync();
             }
         }
 
         [Fact]
         public async Task MultiThread()
         {
-            using (var testServer = new TestServer(new TestServerOptions() { ThreadCount = 2 }))
+            using (var testServer = CreateTestServer(options => options.ThreadCount = 2))
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
@@ -72,12 +87,13 @@ namespace Tests
         [Fact]
         public async Task Unbind()
         {
-            using (var testServer = new TestServer())
+            using (var testServer = CreateTestServer())
             {
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
                 var exception = Assert.Throws<IOException>(() => testServer.ConnectTo());
                 Assert.Equal(PosixResult.ECONNREFUSED, exception.HResult);
+                await testServer.StopAsync();
             }
         }
 
@@ -89,7 +105,8 @@ namespace Tests
             {
                 outputTcs.SetResult(output);
             };
-            using (var testServer = new TestServer(connectionHandler))
+
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
 
@@ -118,6 +135,8 @@ namespace Tests
                     });
                     Assert.Equal(PosixResult.EPIPE, exception.HResult);
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -155,7 +174,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -173,6 +192,8 @@ namespace Tests
                         receivedBytes += received;
                     }
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -214,7 +235,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -223,6 +244,8 @@ namespace Tests
                     // because we aren't reading
                     await waitingForTimeout.Task;
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -237,13 +260,15 @@ namespace Tests
                 inputCompletedTcs.SetResult(null);
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
                 {
                     await inputCompletedTcs.Task;
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -274,7 +299,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(new TestServerOptions() { ConnectionHandler = connectionHandler}))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -292,6 +317,8 @@ namespace Tests
                     var receiveBuffer = new byte[1];
                     client.Receive(new ArraySegment<byte>(receiveBuffer));
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -309,7 +336,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionHandler))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -334,6 +361,8 @@ namespace Tests
                     } while (!eof);
                     Assert.True(totalReceived == sendLength);
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -352,10 +381,10 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = new TestServer(new TestServerOptions()
-                                        { ConnectionHandler = connectionHandler,
-                                        ThreadCount = 2,
-                                        UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}" }))
+            using (var testServer = CreateTestServer(options =>
+                                        { options.ConnectionHandler = connectionHandler;
+                                          options.ThreadCount = 2;
+                                          options.UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}"; }))
             {
                 await testServer.BindAsync();
 
@@ -382,6 +411,21 @@ namespace Tests
                 Assert.NotEqual(threadIds[0], threadIds[1]);
                 Assert.Equal(threadIds[0], threadIds[2]);
                 Assert.Equal(threadIds[1], threadIds[3]);
+
+                await testServer.StopAsync();
+            }
+        }
+
+        [Fact]
+        public async Task FailedBindThrows()
+        {
+            int port = 50;
+            using (var testServer = CreateTestServer(options =>
+                                options.IPEndPoint = new IPEndPoint(IPAddress.Loopback, port)))
+            {
+                await Assert.ThrowsAnyAsync<Exception>(() => testServer.BindAsync());
+
+                await testServer.StopAsync();
             }
         }
 
@@ -477,5 +521,20 @@ namespace Tests
             }
             remainderRef = remainder;
         }
+    }
+
+    public sealed class DefaultOptionsTransportTests : TransportTestsBase
+    {
+        protected override TestServerOptions CreateOptions() => new TestServerOptions();
+    }
+
+    public sealed class AioTransportTests : TransportTestsBase
+    {
+        protected override TestServerOptions CreateOptions()
+            => new TestServerOptions()
+            {
+                AioReceive = true,
+                AioSend = true
+            };
     }
 }
