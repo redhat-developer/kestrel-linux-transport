@@ -269,6 +269,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        // TODO: remove this
         public void Dispose()
         {
             lock (_gate)
