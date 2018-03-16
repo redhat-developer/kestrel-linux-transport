@@ -24,7 +24,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         protected override bool ReleaseHandle()
         {
-            var result = IOInterop.Close(handle);
+            var result = IOInterop.Close(handle.ToInt32());
             return result.IsSuccess;
         }
 

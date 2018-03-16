@@ -10,7 +10,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
     static class IOInterop
     {
         [DllImport(Interop.Library, EntryPoint = "RHXKL_Close")]
-        public static extern PosixResult Close(IntPtr handle);
+        public static extern PosixResult Close(int handle);
 
         [DllImport(Interop.Library, EntryPoint = "RHXKL_Write")]
         public static unsafe extern PosixResult Write(SafeHandle handle, byte* buf, int count);

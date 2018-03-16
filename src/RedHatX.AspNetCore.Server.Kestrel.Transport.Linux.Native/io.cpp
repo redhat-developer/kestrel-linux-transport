@@ -8,14 +8,13 @@
 
 extern "C"
 {
-    PosixResult RHXKL_Close(intptr_t handle);
+    PosixResult RHXKL_Close(int handle);
     PosixResult RHXKL_Write(intptr_t handle, void* buf, int32_t count);
     PosixResult RHXKL_Read(intptr_t handle, void* buf, int32_t count);
 }
 
-PosixResult RHXKL_Close(intptr_t handle)
+PosixResult RHXKL_Close(int fd)
 {
-    int fd = ToFileDescriptor(handle);
     // don't CheckInterrupted, linux and and many other implementations
     // close the file descriptor even when returning EINTR
     int rv = close(fd);

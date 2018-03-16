@@ -271,17 +271,21 @@ namespace Tests
             SocketPair pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
             PosixResult result;
 
+            Socket socket1 = new Socket(pair.Socket1);
+            Socket socket2 = new Socket(pair.Socket2);
+
             // Send
-            result = pair.Socket1.TrySend(s_data);
+            result = socket1.TrySend(s_data);
 
             // Receive
             byte[] receiveBuffer = new byte[10];
-            result = pair.Socket2.TryReceive(new ArraySegment<byte>(receiveBuffer));
+            result = socket2.TryReceive(new ArraySegment<byte>(receiveBuffer));
             Assert.True(result.IsSuccess);
             Assert.Equal(s_data.Count, result.Value);
 
             // Close
-            pair.Dispose();
+            socket1.Dispose();
+            socket2.Dispose();
         }
 
         [Fact]
@@ -306,8 +310,9 @@ namespace Tests
             Assert.True(result.IsSuccess);
             
             // receive accept socket
-            Socket acceptSocket;
-            result = pair.Socket2.TryReceiveSocket(out acceptSocket, blocking: true);
+            int acceptSocketFd;
+            result = SocketInterop.ReceiveSocket(pair.Socket2, out acceptSocketFd, blocking: true);
+            Socket acceptSocket = result.IsSuccess ? new Socket(acceptSocketFd) : null;
             Assert.True(result.IsSuccess);
             Assert.Equal(1, result.Value);
 
