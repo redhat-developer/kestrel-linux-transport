@@ -135,7 +135,9 @@ namespace Tests
 
         public void Dispose()
         {
-            _transport.Dispose(); 
+            Task stopTask = _transport.StopAsync();
+            // Tests must have called StopAsync already.
+            Assert.True(stopTask.IsCompleted);
         }
 
         public static async void Echo(PipeReader input, PipeWriter output)
