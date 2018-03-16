@@ -19,9 +19,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             Unbinding,
             Unbound,
             Stopping,
-            Stopped,
-            Disposing,
-            Disposed
+            Stopped
         }
         // Kestrel LibuvConstants.ListenBacklog
         private const int ListenBacklog = 128;
@@ -207,7 +205,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             lock (_gate)
             {
-                ThrowIfDisposed();
                 if (_state <= State.Unbinding)
                 {
                     _state = State.Unbinding;
@@ -240,7 +237,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             lock (_gate)
             {
-                ThrowIfDisposed();
                 if (_state <= State.Stopping)
                 {
                     _state = State.Stopping;
@@ -269,45 +265,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        // TODO: remove this
-        public void Dispose()
-        {
-            lock (_gate)
-            {
-                if (_state < State.Disposing)
-                {
-                    _state = State.Disposing;
-                }
-            }
-            var tasks = new Task[_threads.Length];
-            for (int i = 0; i < _threads.Length; i++)
-            {
-                tasks[i] = _threads[i].StopAsync();
-            }
-            try
-            {
-                Task.WaitAll(tasks);
-            }
-            finally
-            {
-                lock (_gate)
-                {
-                    _state = State.Disposed;
-                }
-            }
-        }
-
-        private void ThrowIfDisposed()
-        {
-            if (_state == State.Disposed)
-            {
-                throw new ObjectDisposedException(typeof(Transport).FullName);
-            }
-        }
-
         private void ThrowInvalidOperation()
         {
-            ThrowIfDisposed();
             throw new InvalidOperationException($"Invalid operation: {_state}");
         }
     }
