@@ -56,7 +56,7 @@ PosixResult RHXKL_IoGetEvents(intptr_t ctx, int32_t min_nr, int32_t max_nr, stru
     }
 
     int rv;
-    while (CheckInterrupted(rv = syscall(__NR_io_getevents, ctx, min_nr_, max_nr_, events, timeoutMs < 0 ? NULL : &timeout)));
+    while (CheckInterrupted(rv = syscall(__NR_io_getevents, ctx, min_nr_, max_nr_, events, timeoutMs < 0 ? nullptr : &timeout)));
 
     return ToPosixResult(rv);
 }

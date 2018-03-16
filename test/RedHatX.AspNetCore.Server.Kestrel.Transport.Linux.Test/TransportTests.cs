@@ -46,6 +46,7 @@ namespace Tests
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                     Assert.Equal(sendBuffer.Length, received);
                 }
+                await testServer.StopAsync();
             }
         }
 
@@ -68,6 +69,7 @@ namespace Tests
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                     Assert.Equal(sendBuffer.Length, received);
                 }
+                await testServer.StopAsync();
             }
         }
 
@@ -91,6 +93,7 @@ namespace Tests
                 await testServer.UnbindAsync();
                 var exception = Assert.Throws<IOException>(() => testServer.ConnectTo());
                 Assert.Equal(PosixResult.ECONNREFUSED, exception.HResult);
+                await testServer.StopAsync();
             }
         }
 
@@ -132,6 +135,8 @@ namespace Tests
                     });
                     Assert.Equal(PosixResult.EPIPE, exception.HResult);
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -187,6 +192,8 @@ namespace Tests
                         receivedBytes += received;
                     }
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -237,6 +244,8 @@ namespace Tests
                     // because we aren't reading
                     await waitingForTimeout.Task;
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -258,6 +267,8 @@ namespace Tests
                 {
                     await inputCompletedTcs.Task;
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -306,6 +317,8 @@ namespace Tests
                     var receiveBuffer = new byte[1];
                     client.Receive(new ArraySegment<byte>(receiveBuffer));
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -348,6 +361,8 @@ namespace Tests
                     } while (!eof);
                     Assert.True(totalReceived == sendLength);
                 }
+
+                await testServer.StopAsync();
             }
         }
 
@@ -396,6 +411,8 @@ namespace Tests
                 Assert.NotEqual(threadIds[0], threadIds[1]);
                 Assert.Equal(threadIds[0], threadIds[2]);
                 Assert.Equal(threadIds[1], threadIds[3]);
+
+                await testServer.StopAsync();
             }
         }
 
@@ -407,6 +424,8 @@ namespace Tests
                                 options.IPEndPoint = new IPEndPoint(IPAddress.Loopback, port)))
             {
                 await Assert.ThrowsAnyAsync<Exception>(() => testServer.BindAsync());
+
+                await testServer.StopAsync();
             }
         }
 
