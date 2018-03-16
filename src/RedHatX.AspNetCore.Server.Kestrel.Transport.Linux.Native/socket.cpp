@@ -57,23 +57,23 @@ static_assert(OffsetOfIOVectorCount == OffsetOfIovecLen, "");
 
 extern "C"
 {
-    PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* createdSocket);
+    PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, int32_t* createdSocket);
     PosixResult RHXKL_Connect(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
-    PosixResult RHXKL_Bind(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
-    PosixResult RHXKL_GetAvailableBytes(intptr_t socket);
-    PosixResult RHXKL_Listen(intptr_t socket, int backlog);
-    PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, intptr_t* acceptedSocket);
+    PosixResult RHXKL_Bind(int32_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
+    PosixResult RHXKL_GetAvailableBytes(int32_t socket);
+    PosixResult RHXKL_Listen(int32_t socket, int backlog);
+    PosixResult RHXKL_Accept(int32_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int32_t blocking, int32_t* acceptedSocket);
     PosixResult RHXKL_Shutdown(intptr_t socket, int32_t socketShutdown);
     PosixResult RHXKL_Send(int socket, IOVector* ioVectors, int ioVectorLen, int flags);
     PosixResult RHXKL_Receive(int socket, IOVector* ioVectors, int ioVectorLen);
-    PosixResult RHXKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
+    PosixResult RHXKL_SetSockOpt(int32_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen);
     PosixResult RHXKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t* optionLen);
-    PosixResult RHXKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
-    PosixResult RHXKL_GetSockName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
+    PosixResult RHXKL_GetPeerName(int32_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
+    PosixResult RHXKL_GetSockName(int32_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen);
     PosixResult RHXKL_Duplicate(intptr_t socket, intptr_t* dup);
-    PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking);
-    PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket);
-    PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2);
+    PosixResult RHXKL_ReceiveHandle(int32_t socket, int32_t* receiveHandle, int32_t blocking);
+    PosixResult RHXKL_AcceptAndSendHandleTo(int32_t acceptSocket, int32_t toSocket);
+    PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, int32_t* socket1, int32_t* socket2);
     PosixResult RHXKL_CompleteZeroCopy(int socket);
     PosixResult RHXKL_Disconnect(int fd);
 }
@@ -695,7 +695,7 @@ static bool TryConvertProtocolTypePalToPlatform(int32_t palProtocolType, int* pl
     }
 }
 
-PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* createdSocket)
+PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, int* createdSocket)
 {
     if (createdSocket == nullptr)
     {
@@ -735,10 +735,8 @@ PosixResult RHXKL_Socket(int32_t addressFamily, int32_t socketType, int32_t prot
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_GetAvailableBytes(intptr_t socket)
+PosixResult RHXKL_GetAvailableBytes(int fd)
 {
-    int fd = ToFileDescriptor(socket);
-
     int rv;
     int err = ioctl(fd, FIONREAD, &rv);
     if (err == -1)
@@ -764,9 +762,8 @@ PosixResult RHXKL_Connect(intptr_t socket, PalSocketAddress* palSocketAddress, i
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Bind(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen)
+PosixResult RHXKL_Bind(int fd, PalSocketAddress* palSocketAddress, int32_t palEndPointLen)
 {
-    int fd = ToFileDescriptor(socket);
     sockaddr_storage storage;
     socklen_t sockLen;
     if (!TryGetPlatformSocketAddress(palSocketAddress, palEndPointLen, &storage, &sockLen))
@@ -778,21 +775,19 @@ PosixResult RHXKL_Bind(intptr_t socket, PalSocketAddress* palSocketAddress, int3
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Listen(intptr_t socket, int32_t backlog)
+PosixResult RHXKL_Listen(int fd, int32_t backlog)
 {
-    int fd = ToFileDescriptor(socket);
     int rv = listen(fd, backlog);
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_Accept(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int blocking, intptr_t* acceptedSocket)
+PosixResult RHXKL_Accept(int fd, PalSocketAddress* palSocketAddress, int32_t palEndPointLen, int blocking, int* acceptedSocket)
 {
     if (acceptedSocket == nullptr || (palSocketAddress != nullptr && palEndPointLen < 2))
     {
         return PosixResultEFAULT;
     }
 
-    int fd = ToFileDescriptor(socket);
     int flags = SOCK_CLOEXEC;
     if (blocking == 0)
     {
@@ -892,14 +887,12 @@ PosixResult RHXKL_Receive(int fd, IOVector* ioVectors, int ioVectorLen)
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_SetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen)
+PosixResult RHXKL_SetSockOpt(int fd, int32_t socketOptionLevel, int32_t socketOptionName, uint8_t* optionValue, int32_t optionLen)
 {
     if (optionLen < 0)
     {
         return PosixResultEFAULT;
     }
-
-    int fd = ToFileDescriptor(socket);
 
     int optLevel, optName;
     if (!TryGetPlatformSocketOption(socketOptionLevel, socketOptionName, optLevel, optName))
@@ -933,14 +926,13 @@ PosixResult RHXKL_GetSockOpt(intptr_t socket, int32_t socketOptionLevel, int32_t
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen)
+PosixResult RHXKL_GetPeerName(int fd, PalSocketAddress* palSocketAddress, int32_t palEndPointLen)
 {
     if (palSocketAddress == nullptr || palEndPointLen < 2)
     {
         return PosixResultEFAULT;
     }
 
-    int fd = ToFileDescriptor(socket);
     sockaddr_storage storage;
     socklen_t sockLen = sizeof(sockaddr_storage);
     int rv = getpeername(fd, reinterpret_cast<sockaddr*>(&storage), &sockLen);
@@ -952,14 +944,13 @@ PosixResult RHXKL_GetPeerName(intptr_t socket, PalSocketAddress* palSocketAddres
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_GetSockName(intptr_t socket, PalSocketAddress* palSocketAddress, int32_t palEndPointLen)
+PosixResult RHXKL_GetSockName(int fd, PalSocketAddress* palSocketAddress, int32_t palEndPointLen)
 {
     if (palSocketAddress == nullptr || palEndPointLen < 2)
     {
         return PosixResultEFAULT;
     }
 
-    int fd = ToFileDescriptor(socket);
     sockaddr_storage storage;
     socklen_t sockLen = sizeof(sockaddr_storage);
     int rv = getsockname(fd, reinterpret_cast<sockaddr*>(&storage), &sockLen);
@@ -987,7 +978,7 @@ PosixResult RHXKL_Duplicate(intptr_t socket, intptr_t* dup)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunknown-pragmas" // Fix next ignore being unknown
 #pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant" // expanded from macro 'CMSG_FIRSTHDR'
-PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_t blocking)
+PosixResult RHXKL_ReceiveHandle(int fd, int* receiveHandle, int32_t blocking)
 {
     if (receiveHandle == nullptr)
     {
@@ -1014,7 +1005,6 @@ PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_
         .msg_flags = 0
     };
 
-    int fd = ToFileDescriptor(socket);
     int flags = MSG_NOSIGNAL | MSG_CMSG_CLOEXEC;
     int rv;
     while (CheckInterrupted(rv = static_cast<int>(recvmsg(fd, &header, flags))));
@@ -1048,10 +1038,8 @@ PosixResult RHXKL_ReceiveHandle(intptr_t socket, intptr_t* receiveHandle, int32_
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket)
+PosixResult RHXKL_AcceptAndSendHandleTo(int acceptFd, int toFd)
 {
-    int acceptFd = ToFileDescriptor(acceptSocket);
-
     int rv;
     while (CheckInterrupted(rv = accept4(acceptFd, nullptr, nullptr, SOCK_CLOEXEC)));
     if (rv != -1)
@@ -1083,7 +1071,6 @@ PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket
         int *fdptr = reinterpret_cast<int*>(CMSG_DATA(cmsg));
         *fdptr = acceptedFd;
 
-        int toFd = ToFileDescriptor(toSocket);
         while (CheckInterrupted(rv = static_cast<int>(sendmsg(toFd, &header, MSG_NOSIGNAL))));
 
         close(acceptedFd);
@@ -1092,7 +1079,7 @@ PosixResult RHXKL_AcceptAndSendHandleTo(intptr_t acceptSocket, intptr_t toSocket
     return ToPosixResult(rv);
 }
 
-PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, intptr_t* socket1, intptr_t* socket2)
+PosixResult RHXKL_SocketPair(int32_t addressFamily, int32_t socketType, int32_t protocolType, int32_t blocking, int* socket1, int* socket2)
 {
     if (socket1 == nullptr || socket2 == nullptr)
     {

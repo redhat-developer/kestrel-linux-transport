@@ -20,16 +20,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private TaskCompletionSource<object> _stoppedTcs;
         private Thread _thread;
         private PipeEndPair _pipeEnds;
-        private Socket[] _handlers;
+        private int[] _handlers;
 
         public AcceptThread(Socket socket)
         {
             _socket = socket;
             _state = State.Initial;
-            _handlers = Array.Empty<Socket>();
+            _handlers = Array.Empty<int>();
         }
 
-        public Socket CreateReceiveSocket()
+        public int CreateReceiveSocket()
         {
             lock (_gate)
             {
@@ -38,7 +38,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     throw new InvalidOperationException($"Invalid operation: {_state}");
                 }
                 var pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
-                var updatedHandlers = new Socket[_handlers.Length + 1];
+                var updatedHandlers = new int[_handlers.Length + 1];
                 Array.Copy(_handlers, updatedHandlers, _handlers.Length);
                 updatedHandlers[updatedHandlers.Length - 1] = pair.Socket1;
                 _handlers = updatedHandlers;
@@ -46,7 +46,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public async Task BindAsync()
+        public Task BindAsync()
         {
             lock (_gate)
             {
@@ -72,6 +72,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     throw;
                 }
             }
+            return Task.CompletedTask;
         }
 
         public Task UnbindAsync()
@@ -103,7 +104,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             _pipeEnds.Dispose();
             foreach (var handler in _handlers)
             {
-                handler.Dispose();
+                IOInterop.Close(handler);
             }
         }
 

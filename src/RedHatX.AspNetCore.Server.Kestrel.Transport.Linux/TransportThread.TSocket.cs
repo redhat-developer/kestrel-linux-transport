@@ -63,7 +63,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public readonly object         Gate = new object();
             private readonly ThreadContext _threadContext;
-            public readonly Socket         Socket; // TODO: remove
             public readonly int            Fd;
             private readonly Action       _onFlushedToApp;
             private readonly Action       _onReadFromApp;
@@ -78,9 +77,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private int                   _zeropCopyState;
             private SequencePosition      _zeroCopyEnd;
 
-            public TSocket(ThreadContext threadContext, Socket socket, int fd, SocketFlags flags)
+            public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
             {
-                Socket = socket;
                 _threadContext = threadContext;
                 Fd = fd;
                 _flags = flags;
@@ -428,7 +426,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // We are not using SafeHandles to increase performance.
                 // We get here when both reading and writing has stopped
                 // so we are sure this is the last use of the Socket.
-                Socket.Dispose();
+                Close();
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -752,6 +750,78 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
 
             public override PipeScheduler OutputReaderScheduler => PipeScheduler.Inline;
+
+            public PosixResult TryReceiveSocket(out int socket, bool blocking)
+                => SocketInterop.ReceiveSocket(Fd, out socket, blocking);
+
+            public unsafe PosixResult TryAccept(out int socket, bool blocking)
+                => SocketInterop.Accept(Fd, null, 0, blocking, out socket);
+
+            public int GetAvailableBytes()
+            {
+                PosixResult result = SocketInterop.GetAvailableBytes(Fd);
+                result.ThrowOnError();
+                return result.Value;
+            }
+
+            public void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
+            {
+                TrySetSocketOption(optionLevel, optionName, value)
+                    .ThrowOnError();
+            }
+
+            public unsafe PosixResult TrySetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
+            {
+                return SocketInterop.SetSockOpt(Fd, optionLevel, optionName, (byte*)&value, 4);
+            }
+
+            public unsafe void Bind(IPEndPointStruct endpoint)
+            {
+                IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
+                SocketInterop.Bind(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress)).ThrowOnError();
+            }
+
+            public void Listen(int backlog) => SocketInterop.Listen(Fd, backlog).ThrowOnError();
+
+            public void Close() => IOInterop.Close(Fd);
+
+            public IPEndPointStruct GetLocalIPAddress(IPAddress reuseAddress = null)
+            {
+                IPEndPointStruct ep;
+                TryGetLocalIPAddress(out ep, reuseAddress)
+                    .ThrowOnError();
+                return ep;
+            }
+
+            public unsafe PosixResult TryGetLocalIPAddress(out IPEndPointStruct ep, IPAddress reuseAddress = null)
+            {
+                IPSocketAddress socketAddress;
+                var rv = SocketInterop.GetSockName(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress));
+                if (rv.IsSuccess)
+                {
+                    ep = socketAddress.ToIPEndPoint(reuseAddress);
+                }
+                else
+                {
+                    ep = default(IPEndPointStruct);
+                }
+                return rv;
+            }
+
+            public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
+            {
+                IPSocketAddress socketAddress;
+                var rv = SocketInterop.GetPeerName(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress));
+                if (rv.IsSuccess)
+                {
+                    ep = socketAddress.ToIPEndPoint();
+                }
+                else
+                {
+                    ep = default(IPEndPointStruct);
+                }
+                return rv;
+            }
         }
     }
 }

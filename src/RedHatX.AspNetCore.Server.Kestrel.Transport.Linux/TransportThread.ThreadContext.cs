@@ -99,14 +99,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private Socket CreateAcceptSocket(IPEndPoint endPoint, ref SocketFlags flags, out int zeroCopyThreshold)
+            private TSocket CreateAcceptSocket(IPEndPoint endPoint, SocketFlags flags)
             {
-                Socket acceptSocket = null;
+                int acceptSocketFd = -1;
                 int port = endPoint.Port;
                 try
                 {
                     bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
-                    acceptSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false);
+                    SocketInterop.Socket(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false,
+                        out acceptSocketFd).ThrowOnError();
+
+                    TSocket acceptSocket = new TSocket(this, acceptSocketFd, flags);
+
                     if (!ipv4)
                     {
                         // Kestrel does mapped ipv4 by default.
@@ -126,18 +130,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
                     // Linux: allow concurrent binds and let the kernel do load-balancing
                     acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReusePort, 1);
-                    if (_transportOptions.DeferAccept)
+                    if ((flags & SocketFlags.DeferAccept) != 0)
                     {
                         // Linux: wait up to 1 sec for data to arrive before accepting socket
                         acceptSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.DeferAccept, 1);
-                        flags |= SocketFlags.DeferAccept;
                     }
-                    zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                    acceptSocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
                     if (_transportOptions.ZeroCopy && _transportOptions.ZeroCopyThreshold != LinuxTransportOptions.NoZeroCopy)
                     {
                         if (acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ZeroCopy, 1))
                         {
-                            zeroCopyThreshold = _transportOptions.ZeroCopyThreshold;
+                            acceptSocket.ZeroCopyThreshold = _transportOptions.ZeroCopyThreshold;
                         }
                     }
 
@@ -155,7 +158,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 catch
                 {
-                    acceptSocket?.Dispose();
+                    if (acceptSocketFd != -1)
+                    {
+                        IOInterop.Close(acceptSocketFd);
+                    }
                     throw;
                 }
             }
@@ -173,26 +179,26 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                 // create accept socket
                 {
-                    Socket acceptSocket;
-                    SocketFlags flags;
-                    int zeroCopyThreshold;
-                    if (_transportThread.AcceptThread != null)
-                    {
-                        flags = SocketFlags.TypePassFd;
-                        acceptSocket = _transportThread.AcceptThread.CreateReceiveSocket();
-                        zeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
-                    }
-                    else
-                    {
-                        flags = SocketFlags.TypeAccept;
-                        acceptSocket = CreateAcceptSocket(_transportThread.EndPoint, ref flags, out zeroCopyThreshold);
-                    }
+                    TSocket acceptSocket;
+                    SocketFlags flags = SocketFlags.None;
                     if (_transportOptions.DeferSend)
                     {
                         flags |= SocketFlags.DeferSend;
+                    };
+                    if (_transportThread.AcceptThread != null)
+                    {
+                        flags |= SocketFlags.TypePassFd;
+                        int acceptSocketFd = _transportThread.AcceptThread.CreateReceiveSocket();
+                        acceptSocket = new TSocket(this, acceptSocketFd, flags);
+                        acceptSocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
+                    }
+                    else
+                    {
+                        flags |= SocketFlags.TypeAccept;
+                        acceptSocket = CreateAcceptSocket(_transportThread.EndPoint, flags);
                     }
                     // accept connections
-                    AcceptOn(acceptSocket, flags, zeroCopyThreshold);
+                    AcceptOn(acceptSocket);
                 }
             }
 
@@ -367,7 +373,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             for (int i = 0; i < readableSockets.Count; i++)
                             {
                                 TSocket socket = readableSockets[i];
-                                int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
+                                int availableBytes = !checkAvailable ? 0 : socket.GetAvailableBytes();
                                 var receiveResult = socket.Receive(availableBytes);
                                 socket.OnReceiveFromSocket(receiveResult);
                             }
@@ -445,7 +451,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 for (int i = 0; i < readableSocketCount; i++)
                 {
                     TSocket socket = readableSockets[i];
-                    int availableBytes = !checkAvailable ? 0 : socket.Socket.GetAvailableBytes();
+                    int availableBytes = !checkAvailable ? 0 : socket.GetAvailableBytes();
                     int ioVectorLength = socket.CalcIOVectorLengthForReceive(availableBytes, IoVectorsPerAioSocket);
                     int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
 
@@ -558,33 +564,36 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private int HandleAccept(TSocket tacceptSocket)
             {
                 var type = tacceptSocket.Type;
-                Socket clientSocket;
+                int clientFd = -1;
                 PosixResult result;
                 if (type == SocketFlags.TypeAccept)
                 {
                     // TODO: should we handle more than 1 accept? If we do, we shouldn't be to eager
                     //       as that might give the kernel the impression we have nothing to do
                     //       which could interfere with the SO_REUSEPORT load-balancing.
-                    result = tacceptSocket.Socket.TryAccept(out clientSocket, blocking: false);
+                    result = tacceptSocket.TryAccept(out clientFd, blocking: false);
                 }
                 else
                 {
-                    result = tacceptSocket.Socket.TryReceiveSocket(out clientSocket, blocking: false);
+                    result = tacceptSocket.TryReceiveSocket(out clientFd, blocking: false);
                     if (result.Value == 0)
                     {
                         // The socket passing us file descriptors has closed.
                         // We dispose our end so we get get removed from the epoll.
-                        tacceptSocket.Socket.Dispose();
+                        tacceptSocket.Close();
                         return 0;
                     }
                 }
                 if (result.IsSuccess)
                 {
-                    int fd;
                     TSocket tsocket;
                     try
                     {
-                        fd = clientSocket.DangerousGetHandle().ToInt32();
+                        SocketFlags flags = SocketFlags.TypeClient | (tacceptSocket.IsDeferSend ? SocketFlags.DeferSend : SocketFlags.None);
+                        tsocket = new TSocket(this, clientFd, flags)
+                        {
+                            ZeroCopyThreshold = tacceptSocket.ZeroCopyThreshold
+                        };
 
                         bool ipSocket = !object.ReferenceEquals(tacceptSocket.LocalAddress, NotIPSocket);
 
@@ -592,10 +601,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         // of allocating a new one for the same address.
                         IPEndPointStruct localAddress = default(IPEndPointStruct);
                         IPEndPointStruct remoteAddress = default(IPEndPointStruct);
-                        if (ipSocket && clientSocket.TryGetLocalIPAddress(out localAddress, tacceptSocket.LocalAddress))
+                        if (ipSocket && tsocket.TryGetLocalIPAddress(out localAddress, tacceptSocket.LocalAddress))
                         {
-                            tacceptSocket.LocalAddress = localAddress.Address;
-                            clientSocket.TryGetPeerIPAddress(out remoteAddress);
+                            tsocket.LocalAddress = localAddress.Address;
+                            tsocket.LocalPort = localAddress.Port;
+                            if (tsocket.TryGetPeerIPAddress(out remoteAddress))
+                            {
+                                tsocket.RemoteAddress = remoteAddress.Address;
+                                tsocket.RemotePort = remoteAddress.Port;
+                            }
                         }
                         else
                         {
@@ -604,24 +618,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                             ipSocket = false;
                         }
 
-                        SocketFlags flags = SocketFlags.TypeClient | (tacceptSocket.IsDeferSend ? SocketFlags.DeferSend : SocketFlags.None);
-                        tsocket = new TSocket(this, clientSocket, fd, flags)
-                        {
-                            RemoteAddress = remoteAddress.Address,
-                            RemotePort = remoteAddress.Port,
-                            LocalAddress = localAddress.Address,
-                            LocalPort = localAddress.Port,
-                            ZeroCopyThreshold = tacceptSocket.ZeroCopyThreshold
-                        };
-
                         if (ipSocket)
                         {
-                            clientSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                            tsocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
                         }
                     }
                     catch
                     {
-                        clientSocket.Dispose();
+                        IOInterop.Close(clientFd);
                         return 0;
                     }
 
@@ -629,7 +633,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                     lock (_sockets)
                     {
-                        _sockets.Add(fd, tsocket);
+                        _sockets.Add(clientFd, tsocket);
                     }
 
                     bool dataMayBeAvailable = tacceptSocket.IsDeferAccept;
@@ -644,16 +648,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
 
-            private void AcceptOn(Socket acceptSocket, SocketFlags flags, int zeroCopyThreshold)
+            private void AcceptOn(TSocket tsocket)
             {
-                TSocket tsocket = null;
-                int fd = acceptSocket.DangerousGetHandle().ToInt32();
                 try
                 {
-                    tsocket = new TSocket(this, acceptSocket, fd, flags)
-                    {
-                        ZeroCopyThreshold = zeroCopyThreshold
-                    };
                     _acceptSockets.Add(tsocket);
                     lock (_sockets)
                     {
@@ -662,17 +660,17 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
                     EPollInterop.EPollControl(_epollFd,
                                               EPollOperation.Add,
-                                              fd,
+                                              tsocket.Fd,
                                               EPollEvents.Readable,
-                                              EPollData(fd));
+                                              EPollData(tsocket.Fd));
                 }
                 catch
                 {
-                    acceptSocket.Dispose();
+                    tsocket.Close();
                     _acceptSockets.Remove(tsocket);
                     lock (_sockets)
                     {
-                        _sockets.Remove(fd);
+                        _sockets.Remove(tsocket.Fd);
                     }
                     throw;
                 }
@@ -911,7 +909,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 for (int i = 0; i < acceptSockets.Count; i++)
                 {
                     // close causes remove from epoll (CLOEXEC)
-                    acceptSockets[i].Socket.Dispose(); // will close (no concurrent users)
+                    acceptSockets[i].Close(); // will close (no concurrent users)
                 }
                 acceptSockets.Clear();
                 CompleteStateChange(TransportThreadState.AcceptClosed);
