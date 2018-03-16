@@ -70,7 +70,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public int                     ZeroCopyThreshold;
 
             private SocketFlags           _flags;
-            private Exception             _outputCompleteError;
             private Exception             _inputCompleteError;
             private ValueTaskAwaiter<ReadResult>  _readAwaiter;
             private ValueTaskAwaiter<FlushResult> _flushAwaiter;
@@ -345,10 +344,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return loop;
             }
 
-            public void CompleteOutput(Exception e)
+            public void CompleteOutput(Exception error)
             {
-                _outputCompleteError = e;
-                CancelReadFromSocket(e);
+                Output.Complete(error);
+                CancelReadFromSocket(error);
                 CleanupSocketEnd();
             }
 
@@ -417,8 +416,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         return;
                     }
                 }
-
-                Output.Complete(_outputCompleteError); // TODO: should this be called earlier?
 
                 // First remove from the Dictionary, so we can't match with a new fd.
                 _threadContext.RemoveSocket(Fd);
