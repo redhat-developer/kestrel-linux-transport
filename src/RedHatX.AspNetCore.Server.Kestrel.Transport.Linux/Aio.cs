@@ -45,6 +45,18 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public int           Length { set { _nBytes = (ulong)value; } }
     }
 
+    struct AioRing
+    {
+        public int Id;
+        public int Nr;
+        public volatile int Head;
+        public volatile int Tail;
+        public uint Magic;
+        public uint CompatFeatures;
+        public uint IncompatFeatures;
+        public int HeaderLength;
+    }
+
     static class AioInterop
     {
         [DllImport(Interop.Library, EntryPoint = "RHXKL_IoSetup")]
@@ -59,5 +71,60 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         [DllImport(Interop.Library, EntryPoint = "RHXKL_IoGetEvents")]
         public unsafe static extern PosixResult IoGetEvents(IntPtr ctxp, int minNr, int maxNr, AioEvent* events, int timeoutMs);
+
+        public unsafe static PosixResult IoGetEvents(IntPtr ctxp, int nr, AioEvent* events)
+        {
+            if (nr <= 0)
+            {
+                return new PosixResult(PosixResult.EINVAL);
+            }
+            AioRing* pRing = (AioRing*)ctxp;
+            if (pRing->Magic == 0xa10a10a1 && pRing->IncompatFeatures == 0)
+            {
+                int head = pRing->Head;
+                int tail = pRing->Tail;
+                int available = tail - head;
+                if (available < 0)
+                {
+                    available += pRing->Nr;
+                }
+                if (available >= nr)
+                {
+                    AioEvent* ringEvents = (AioEvent*)((byte*)pRing + pRing->HeaderLength);
+                    AioEvent* start = ringEvents + head;
+                    AioEvent* end = start + nr;
+                    if (head + nr > pRing->Nr)
+                    {
+                        end -= pRing->Nr;
+                    }
+                    if (end > start)
+                    {
+                        Copy(start, end, events);
+                    }
+                    else
+                    {
+                        AioEvent* eventsEnd = Copy(start, ringEvents + pRing->Nr, events);
+                        Copy(ringEvents, end, eventsEnd);
+                    }
+                    head += nr;
+                    if (head >= pRing->Nr)
+                    {
+                        head -= pRing->Nr;
+                    }
+                    pRing->Head = head;
+                    return new PosixResult(nr);
+                }
+            }
+            return IoGetEvents(ctxp, nr, nr, events, -1);
+        }
+
+        private static unsafe AioEvent* Copy(AioEvent* start, AioEvent* end, AioEvent* dst)
+        {
+            while (start < end)
+            {
+                *dst++ = *start++;
+            }
+            return dst;
+        }
     }
 }
