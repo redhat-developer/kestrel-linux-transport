@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
@@ -120,11 +121,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static unsafe AioEvent* Copy(AioEvent* start, AioEvent* end, AioEvent* dst)
         {
-            while (start < end)
-            {
-                *dst++ = *start++;
-            }
-            return dst;
+            uint byteCount = (uint)((byte*)end - (byte*)start);
+            Unsafe.CopyBlock(dst, start, byteCount);
+            return (AioEvent*)((byte*)dst + byteCount);
         }
     }
 }
