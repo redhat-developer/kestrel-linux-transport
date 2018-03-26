@@ -24,7 +24,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             _loggerFactory = loggerFactory;
         }
 
-        public ITransport Create(IEndPointInformation IEndPointInformation, IConnectionHandler handler)
+        public ITransport Create(IEndPointInformation IEndPointInformation, IConnectionDispatcher handler)
         {
             return new Transport(IEndPointInformation, handler, _options, _loggerFactory);
         }

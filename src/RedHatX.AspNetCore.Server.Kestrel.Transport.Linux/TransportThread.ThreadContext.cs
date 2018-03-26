@@ -34,7 +34,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly TransportThread _transportThread;
             private readonly LinuxTransportOptions _transportOptions;
             private readonly ILogger _logger;
-            private readonly IConnectionHandler _connectionHandler;
+            private readonly IConnectionDispatcher _connectionDispatcher;
             // key is the file descriptor
             private readonly Dictionary<int, TSocket> _sockets;
             private readonly List<TSocket> _acceptSockets;
@@ -64,7 +64,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe ThreadContext(TransportThread transportThread)
             {
                 _transportThread = transportThread;
-                _connectionHandler = transportThread.ConnectionHandler;
+                _connectionDispatcher = transportThread.ConnectionDispatcher;
                 _sockets = new Dictionary<int, TSocket>();
                 _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(_transportThread)}.{_transportThread.ThreadId}"); ;
                 _acceptSockets = new List<TSocket>();
@@ -629,7 +629,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         return 0;
                     }
 
-                    _connectionHandler.OnConnection(tsocket);
+                    _connectionDispatcher.OnConnection(tsocket);
 
                     lock (_sockets)
                     {

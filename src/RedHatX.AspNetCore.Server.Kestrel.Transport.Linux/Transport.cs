@@ -25,7 +25,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private const int ListenBacklog = 128;
 
         private readonly IEndPointInformation _endPoint;
-        private readonly IConnectionHandler _connectionHandler;
+        private readonly IConnectionDispatcher _connectionDispatcher;
         private readonly LinuxTransportOptions _transportOptions;
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger _logger;
@@ -33,11 +33,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private readonly object _gate = new object();
         private ITransportActionHandler[] _threads;
 
-        public Transport(IEndPointInformation ipEndPointInformation, IConnectionHandler connectionHandler, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
+        public Transport(IEndPointInformation ipEndPointInformation, IConnectionDispatcher connectionDispatcher, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
-            if (connectionHandler == null)
+            if (connectionDispatcher == null)
             {
-                throw new ArgumentNullException(nameof(connectionHandler));
+                throw new ArgumentNullException(nameof(connectionDispatcher));
             }
             if (transportOptions == null)
             {
@@ -53,7 +53,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             _endPoint = ipEndPointInformation;
-            _connectionHandler = connectionHandler;
+            _connectionDispatcher = connectionDispatcher;
             _transportOptions = transportOptions;
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<Transport>();
@@ -160,7 +160,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(ipEndPoint, _connectionHandler, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
+                var thread = new TransportThread(ipEndPoint, _connectionDispatcher, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
                 threads[i] = thread;
             }
             return threads;
