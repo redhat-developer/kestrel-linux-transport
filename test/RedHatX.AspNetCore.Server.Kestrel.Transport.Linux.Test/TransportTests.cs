@@ -6,7 +6,7 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Protocols;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
@@ -24,8 +24,8 @@ namespace Tests
             return new TestServer(options);
         }
 
-        private TestServer CreateTestServer(TestServerConnectionHandler connectionHandler)
-            => CreateTestServer(options => options.ConnectionHandler = connectionHandler);
+        private TestServer CreateTestServer(TestServerConnectionDispatcher connectionDispatcher)
+            => CreateTestServer(options => options.ConnectionDispatcher = connectionDispatcher);
 
         [InlineData(true)]
         [InlineData(false)]
@@ -101,12 +101,12 @@ namespace Tests
         public async Task StopDisconnectsClient()
         {
             var outputTcs = new TaskCompletionSource<PipeWriter>();
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 outputTcs.SetResult(output);
             };
 
-            using (var testServer = CreateTestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
 
@@ -146,7 +146,7 @@ namespace Tests
             const int bufferSize = 2048;
             int bytesWritten = 0;
             var waitingForWritable = new TaskCompletionSource<object>();
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 Timer writeTimeout = new Timer(
                     // timeout -> we are waiting for the socket to become writable
@@ -174,7 +174,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = CreateTestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -202,7 +202,7 @@ namespace Tests
         {
             const int bufferSize = 2048;
             var waitingForTimeout = new TaskCompletionSource<object>();
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 Timer writeTimeout = new Timer(
                     // timeout -> we are waiting for the socket to become writable
@@ -235,7 +235,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = CreateTestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -253,14 +253,14 @@ namespace Tests
         public async Task CompletingOutputCancelsInput()
         {
             var inputCompletedTcs = new TaskCompletionSource<object>();
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 output.Complete();
                 await input.ReadAsync();
                 inputCompletedTcs.SetResult(null);
             };
 
-            using (var testServer = CreateTestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -278,7 +278,7 @@ namespace Tests
             // client send 1M bytes which are an int counter
             // server receives and checkes the counting
             const int receiveLength = 1000000;
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 int bytesReceived = 0;
                 int remainder = 0; // remaining bytes between ReadableBuffers
@@ -299,7 +299,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = CreateTestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -328,7 +328,7 @@ namespace Tests
             // server send 1M bytes which are an int counter
             // client receives and checkes the counting
             const int sendLength = 1_000_000;
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 FillBuffer(output, sendLength / 4);
                 await output.FlushAsync();
@@ -336,7 +336,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = CreateTestServer(connectionHandler))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
                 using (var client = testServer.ConnectTo())
@@ -369,7 +369,7 @@ namespace Tests
         [Fact]
         public async Task UnixSocketListenType()
         {
-            TestServerConnectionHandler connectionHandler = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 int threadId = Thread.CurrentThread.ManagedThreadId;
                 var data = Encoding.UTF8.GetBytes(threadId.ToString());
@@ -382,7 +382,7 @@ namespace Tests
             };
 
             using (var testServer = CreateTestServer(options =>
-                                        { options.ConnectionHandler = connectionHandler;
+                                        { options.ConnectionDispatcher = connectionDispatcher;
                                           options.ThreadCount = 2;
                                           options.UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}"; }))
             {

@@ -7,7 +7,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Protocols;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 
@@ -21,7 +21,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         private Thread _thread;
         private ThreadContext _threadContext;
 
-        public IConnectionHandler ConnectionHandler { get; }
+        public IConnectionDispatcher ConnectionDispatcher { get; }
         public int ThreadId { get; }
         public IPEndPoint EndPoint { get; }
         public LinuxTransportOptions TransportOptions { get; }
@@ -29,13 +29,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         public ILoggerFactory LoggerFactory { get; }
         public int CpuId { get; }
 
-        public TransportThread(IPEndPoint endPoint, IConnectionHandler connectionHandler, LinuxTransportOptions options, AcceptThread acceptThread, int threadId, int cpuId, ILoggerFactory loggerFactory)
+        public TransportThread(IPEndPoint endPoint, IConnectionDispatcher connectionDispatcher, LinuxTransportOptions options, AcceptThread acceptThread, int threadId, int cpuId, ILoggerFactory loggerFactory)
         {
-            if (connectionHandler == null)
+            if (connectionDispatcher == null)
             {
-                throw new ArgumentNullException(nameof(connectionHandler));
+                throw new ArgumentNullException(nameof(connectionDispatcher));
             }
-            ConnectionHandler = connectionHandler;
+            ConnectionDispatcher = connectionDispatcher;
             ThreadId = threadId;
             CpuId = cpuId;
             EndPoint = endPoint;

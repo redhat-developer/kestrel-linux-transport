@@ -5,7 +5,7 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.Protocols.Features;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
@@ -14,26 +14,26 @@ using Xunit;
 
 namespace Tests
 {
-    public delegate void TestServerConnectionHandler(PipeReader input, PipeWriter output);
+    public delegate void TestServerConnectionDispatcher(PipeReader input, PipeWriter output);
 
     public class TestServerOptions
     {
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
         public bool CheckAvailable { get; set; } = true;
-        public TestServerConnectionHandler ConnectionHandler { get; set; } = TestServer.Echo;
+        public TestServerConnectionDispatcher ConnectionDispatcher { get; set; } = TestServer.Echo;
         public string UnixSocketPath { get; set; }
         public IPEndPoint IPEndPoint { get; set; }
         public bool AioSend { get; set; } = false;
         public bool AioReceive { get; set; } = false;
     }
 
-    class TestServer : IConnectionHandler, IDisposable
+    class TestServer : IConnectionDispatcher, IDisposable
     {
         private Transport _transport;
         private IPEndPoint _serverAddress;
         private string _unixSocketPath;
-        private TestServerConnectionHandler _connectionHandler;
+        private TestServerConnectionDispatcher _connectionDispatcher;
 
         private class EndPointInfo : IEndPointInformation
         {
@@ -48,7 +48,7 @@ namespace Tests
         public TestServer(TestServerOptions options = null)
         {
             options = options ?? new TestServerOptions();
-            _connectionHandler = options.ConnectionHandler;
+            _connectionDispatcher = options.ConnectionDispatcher;
             var transportOptions = new LinuxTransportOptions()
             {
                 ThreadCount = options.ThreadCount,
@@ -81,8 +81,8 @@ namespace Tests
             _transport = new Transport(endPoint, this, transportOptions, loggerFactory);
         }
 
-        public TestServer(TestServerConnectionHandler connectionHandler) :
-            this(new TestServerOptions() { ConnectionHandler = connectionHandler })
+        public TestServer(TestServerConnectionDispatcher connectionDispatcher) :
+            this(new TestServerOptions() { ConnectionDispatcher = connectionDispatcher })
         {}
 
         public Task BindAsync()
@@ -106,7 +106,7 @@ namespace Tests
             var input = new Pipe(GetInputPipeOptions(memoryPool, connection.InputWriterScheduler));
             var output = new Pipe(GetOutputPipeOptions(memoryPool, connection.OutputReaderScheduler));
 
-            _connectionHandler(input.Reader, output.Writer);
+            _connectionDispatcher(input.Reader, output.Writer);
 
             connection.Transport = new DuplexPipe(input.Reader, output.Writer);
             connection.Application = new DuplexPipe(output.Reader, input.Writer);
