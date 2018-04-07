@@ -434,7 +434,7 @@ namespace Tests
             for (int i = 0; i < count; i++)
             {
                 var memory = writer.GetMemory(4);
-                var bufferHandle = memory.Retain(pin: true);
+                var bufferHandle = memory.Pin();
                 void* pointer = bufferHandle.Pointer;
                 *(int*)pointer = i;
                 bufferHandle.Dispose();
@@ -474,7 +474,7 @@ namespace Tests
             int currentValue = bytesReceived / 4;
             foreach (var memory in buffer)
             {
-                var bufferHandle = memory.Retain(pin: true);
+                var bufferHandle = memory.Pin();
                 void* pointer = bufferHandle.Pointer;
                 byte* pMemory = (byte*)pointer;
                 int length = memory.Length;
