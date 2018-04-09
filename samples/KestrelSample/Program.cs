@@ -51,6 +51,7 @@ namespace SampleApp
                 Console.WriteLine("Options: [libuv] [-c<cpuset>] [-t<threadcount>] [ta] [ic] [noda] [nott]");
                 Console.WriteLine("  General:");
                 Console.WriteLine("\tlibuv    Use libuv Transport instead of Linux Transport");
+                Console.WriteLine("\tsock     Use Sockets Transport instead of Linux Transport");
                 Console.WriteLine("\t-t<tc>   Number of transport threads");
                 Console.WriteLine("\t-z<th>   Threshold for using zero-copy");
                 Console.WriteLine("\tnott     Defer requests to thread pool");
@@ -72,6 +73,7 @@ namespace SampleApp
             };
 
             bool libuv = args.Contains("libuv");
+            bool sock = args.Contains("sock");
             // bool ta = args.Contains("ta");
             // bool ic = args.Contains("ic");
             bool ds = !args.Contains("nods");
@@ -116,6 +118,10 @@ namespace SampleApp
             {
                 Console.WriteLine($"Using Libuv: ThreadCount={threadCount}, UseTransportThread={tt}");
             }
+            else if (sock)
+            {
+                System.Console.WriteLine("Using Sockets");
+            }
             else
             {
                 // Console.WriteLine($"Using Linux Transport: Cpus={cpuSet}, ThreadCount={threadCount}, IncomingCpu={ic}, SetThreadAffinity={ta}, DeferAccept={da}, UseTransportThread={tt}");
@@ -133,6 +139,8 @@ namespace SampleApp
             {
                 hostBuilder = hostBuilder.UseLibuv(options => options.ThreadCount = threadCount);
             }
+            else if (sock)
+            { }
             else
             {
                 hostBuilder = hostBuilder.UseLinuxTransport(options =>
