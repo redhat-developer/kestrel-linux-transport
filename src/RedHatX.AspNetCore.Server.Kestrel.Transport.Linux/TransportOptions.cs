@@ -44,6 +44,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     _aioSend = false;
                 }
+                _deferAccept = value;
             }
         }
 
@@ -56,6 +57,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     _aioSend = false;
                 }
+                _deferSend = value;
             }
         }
 
