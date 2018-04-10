@@ -35,6 +35,7 @@ namespace SampleApp
                 loggerFactory.AddConsole(Configuration.GetSection("Logging"));
             }
             app.UsePlainText();
+            app.UseJson();
             app.Run(async context =>
             {
                 var response = $"hello, world{Environment.NewLine}";
