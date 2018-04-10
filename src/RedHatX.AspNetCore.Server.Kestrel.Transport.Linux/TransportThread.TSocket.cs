@@ -46,9 +46,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private const int ZeroCopyAwait = 2;
             private const int MinAllocBufferSize = 2048;
             private const int MSG_ZEROCOPY = 0x4000000;
-            // 128 IOVectors, take up 2KB of stack, can receive/send up to 512KB
-            private const int MaxIOVectorSendLength = 128;
-            private const int MaxIOVectorReceiveLength = 128;
+            // 8 IOVectors, take up 128B of stack, can receive/send up to 32KB
+            public const int MaxIOVectorSendLength = 8;
+            public const int MaxIOVectorReceiveLength = 8;
             private const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
             public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
 
@@ -66,6 +66,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public readonly int            Fd;
             private readonly Action       _onFlushedToApp;
             private readonly Action       _onReadFromApp;
+            private readonly MemoryHandle[] _sendMemoryHandles;
 
             public int                     ZeroCopyThreshold;
 
@@ -83,6 +84,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _flags = flags;
                 _onFlushedToApp = new Action(OnFlushedToApp);
                 _onReadFromApp = new Action(OnReadFromApp);
+                if (!IsDeferSend)
+                {
+                    _sendMemoryHandles = new MemoryHandle[MaxIOVectorSendLength];
+                }
             }
 
             public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
@@ -174,7 +179,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                         else
                         {
-                            loop = OnReadFromApp(loop);
+                            loop = OnReadFromApp(loop, _sendMemoryHandles);
                         }
                     }
                     else
@@ -193,13 +198,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else
                 {
-                    OnReadFromApp(loop: false);
+                    OnReadFromApp(loop: false, _sendMemoryHandles);
                 }
             }
 
-            public void DoDeferedSend()
+            public void DoDeferedSend(Span<MemoryHandle> memoryHandles)
             {
-                OnReadFromApp(loop: false);
+                OnReadFromApp(loop: false, memoryHandles);
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -226,7 +231,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private unsafe bool OnReadFromApp(bool loop)
+            private unsafe bool OnReadFromApp(bool loop, Span<MemoryHandle> memoryHandles)
             {
                 ReadOnlySequence<byte> buffer;
                 Exception error = GetReadResult(out buffer);
@@ -243,10 +248,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     int ioVectorLength = CalcIOVectorLengthForSend(ref buffer, MaxIOVectorSendLength);
                     var ioVectors = stackalloc IOVector[ioVectorLength];
-                    FillSendIOVector(ref buffer, ioVectors, ioVectorLength);
+                    FillSendIOVector(ref buffer, ioVectors, ioVectorLength, memoryHandles);
                     bool zerocopy = buffer.Length >= ZeroCopyThreshold;
 
                     (PosixResult result, bool zeroCopyRegistered) = TrySend(zerocopy, ioVectors, ioVectorLength);
+
+                    for (int i = 0; i < ioVectorLength; i++)
+                    {
+                        memoryHandles[i].Dispose();
+                    }
 
                     return HandleSendResult(ref buffer, result, loop, zerocopy, zeroCopyRegistered);
                 }
@@ -427,7 +437,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe int FillReceiveIOVector(int availableBytes, IOVector* ioVectors, ref int ioVectorLength)
+            public unsafe int FillReceiveIOVector(int availableBytes, IOVector* ioVectors, Span<MemoryHandle> handles, ref int ioVectorLength)
             {
                 PipeWriter writer = Input;
                 Memory<byte> memory = writer.GetMemory(MinAllocBufferSize);
@@ -441,9 +451,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     var bufferHandle = memory.Pin();
                     ioVectors[ioVectorsUsed].Base = bufferHandle.Pointer;
                     ioVectors[ioVectorsUsed].Count = (void*)length;
-                    // It's ok to unpin the handle here because the memory is from the pool
-                    // we created, which is already pinned.
-                    bufferHandle.Dispose();
+                    handles[ioVectorsUsed] = bufferHandle;
                     allocated += length;
 
                     if (allocated >= availableBytes)
@@ -469,42 +477,52 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                        Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, maxLength);
             }
 
-            public unsafe PosixResult Receive(int availableBytes)
+            public unsafe PosixResult Receive(int availableBytes, Span<MemoryHandle> handles)
             {
                 int ioVectorLength = CalcIOVectorLengthForReceive(availableBytes, MaxIOVectorReceiveLength);
                 var ioVectors = stackalloc IOVector[ioVectorLength];
-                int advanced = FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
+                int advanced = FillReceiveIOVector(availableBytes, ioVectors, handles, ref ioVectorLength);
 
-                // Ideally we get availableBytes in a single receive
-                // but we are happy if we get at least a part of it
-                // and we are willing to take {MaxEAgainCount} EAGAINs.
-                // Less data could be returned due to these reasons:
-                // * TCP URG
-                // * packet was not placed in receive queue (race with FIONREAD)
-                // * ?
-                var eAgainCount = 0;
-                var received = 0;
-                do
+                try
                 {
-                    var result = SocketInterop.Receive(Fd, ioVectors, ioVectorLength);
-                    (bool done, PosixResult retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, ioVectorLength);
-                    if (done)
+                    // Ideally we get availableBytes in a single receive
+                    // but we are happy if we get at least a part of it
+                    // and we are willing to take {MaxEAgainCount} EAGAINs.
+                    // Less data could be returned due to these reasons:
+                    // * TCP URG
+                    // * packet was not placed in receive queue (race with FIONREAD)
+                    // * ?
+                    var eAgainCount = 0;
+                    var received = 0;
+                    do
                     {
-                        return retval;
-                    }
-                    else if (retval == PosixResult.EAGAIN)
-                    {
-                        eAgainCount++;
-                        if (eAgainCount == TransportConstants.MaxEAgainCount)
+                        var result = SocketInterop.Receive(Fd, ioVectors, ioVectorLength);
+                        (bool done, PosixResult retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, ioVectorLength);
+                        if (done)
                         {
-                            return TransportConstants.TooManyEAgain;
+                            return retval;
                         }
-                    }
-                    else
+                        else if (retval == PosixResult.EAGAIN)
+                        {
+                            eAgainCount++;
+                            if (eAgainCount == TransportConstants.MaxEAgainCount)
+                            {
+                                return TransportConstants.TooManyEAgain;
+                            }
+                        }
+                        else
+                        {
+                            eAgainCount = 0;
+                        }
+                    } while (true);
+                }
+                finally
+                {
+                    for (int i = 0; i < ioVectorLength; i++)
                     {
-                        eAgainCount = 0;
+                        handles[i].Dispose();
                     }
-                } while (true);
+                }
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -670,7 +688,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe void FillSendIOVector(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength)
+            public unsafe void FillSendIOVector(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength, Span<MemoryHandle> memoryHandles)
             {
                 int i = 0;
                 foreach (var memory in buffer)
@@ -681,10 +699,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     var bufferHandle = memory.Pin();
                     ioVectors[i].Base = bufferHandle.Pointer;
-                    // It's ok to unpin the handle here because the memory is from the pool
-                    // we created, which is already pinned.
-                    bufferHandle.Dispose();
                     ioVectors[i].Count = (void*)memory.Length;
+                    memoryHandles[i] = bufferHandle;
                     i++;
                     if (i == ioVectorLength)
                     {

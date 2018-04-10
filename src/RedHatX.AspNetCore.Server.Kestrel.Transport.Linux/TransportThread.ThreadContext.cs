@@ -52,7 +52,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly IntPtr _ioVectorTableMemory;
             private readonly IntPtr _aioContext;
             private readonly ReadOnlySequence<byte>[] _aioSendBuffers;
-
+            private readonly MemoryHandle[] MemoryHandles;
             public readonly MemoryPool<byte> MemoryPool;
 
             private unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
@@ -87,6 +87,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         _aioSendBuffers = new ReadOnlySequence<byte>[EventBufferLength];
                     }
                 }
+                int maxMemoryHandleCount = TSocket.MaxIOVectorReceiveLength;
+                if (_transportOptions.AioReceive || _transportOptions.AioSend)
+                {
+                    maxMemoryHandleCount = Math.Max(maxMemoryHandleCount, EventBufferLength);
+                }
+                if (_transportOptions.DeferSend)
+                {
+                    maxMemoryHandleCount = Math.Max(maxMemoryHandleCount, TSocket.MaxIOVectorSendLength);
+                }
+                MemoryHandles = new MemoryHandle[maxMemoryHandleCount];
 
                 // These members need to be Disposed
                 _epoll = EPoll.Create();
@@ -370,11 +380,12 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         if (!_transportOptions.AioReceive)
                         {
                             bool checkAvailable = _transportOptions.CheckAvailable;
+                            Span<MemoryHandle> receiveMemoryHandles = MemoryHandles;
                             for (int i = 0; i < readableSockets.Count; i++)
                             {
                                 TSocket socket = readableSockets[i];
                                 int availableBytes = !checkAvailable ? 0 : socket.GetAvailableBytes();
-                                var receiveResult = socket.Receive(availableBytes);
+                                var receiveResult = socket.Receive(availableBytes, receiveMemoryHandles);
                                 socket.OnReceiveFromSocket(receiveResult);
                             }
                             readableSockets.Clear();
@@ -448,12 +459,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 IOVector* ioVectors = IoVectorTable;
                 PosixResult* receiveResults = stackalloc PosixResult[readableSocketCount];
                 bool checkAvailable = _transportOptions.CheckAvailable;
+                Span<MemoryHandle> receiveMemoryHandles = MemoryHandles;
+                int receiveMemoryHandleCount = 0;
                 for (int i = 0; i < readableSocketCount; i++)
                 {
                     TSocket socket = readableSockets[i];
                     int availableBytes = !checkAvailable ? 0 : socket.GetAvailableBytes();
                     int ioVectorLength = socket.CalcIOVectorLengthForReceive(availableBytes, IoVectorsPerAioSocket);
-                    int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, ref ioVectorLength);
+                    int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, receiveMemoryHandles, ref ioVectorLength);
 
                     aioCb->Fd = socket.Fd;
                     aioCb->Data = PackReceiveState(0, advanced, ioVectorLength);
@@ -463,6 +476,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     aioCb++;
 
                     ioVectors += ioVectorLength;
+                    receiveMemoryHandleCount += ioVectorLength;
+                    receiveMemoryHandles = receiveMemoryHandles.Slice(ioVectorLength);
                 }
                 int eAgainCount = 0;
                 while (readableSocketCount > 0)
@@ -545,6 +560,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     readableSockets[i].OnReceiveFromSocket(receiveResults[i]);
                 }
                 readableSockets.Clear();
+                receiveMemoryHandles = MemoryHandles;
+                for (int i = 0; i < receiveMemoryHandleCount; i++)
+                {
+                    receiveMemoryHandles[i].Dispose();
+                }
             }
 
             private void StopSockets()
@@ -815,6 +835,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     AioCb* aioCbs = AioCbs;
                     IOVector* ioVectors = IoVectorTable;
                     ReadOnlySequence<byte>[] sendBuffers = _aioSendBuffers;
+                    Span<MemoryHandle> memoryHandles = MemoryHandles;
+                    int memoryHandleCount = 0;
                     for (int i = 0; i < sendQueue.Count; i++)
                     {
                         TSocket socket = sendQueue[i].Socket;
@@ -828,7 +850,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         else
                         {
                             int ioVectorLength = socket.CalcIOVectorLengthForSend(ref buffer, IoVectorsPerAioSocket);
-                            socket.FillSendIOVector(ref buffer, ioVectors, ioVectorLength);
+                            socket.FillSendIOVector(ref buffer, ioVectors, ioVectorLength, memoryHandles);
+                            memoryHandles = memoryHandles.Slice(ioVectorLength);
+                            memoryHandleCount += ioVectorLength;
 
                             aioCbs->Fd = socket.Fd;
                             aioCbs->Data = i;
@@ -851,6 +875,13 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         IntPtr ctxp = _aioContext;
                         PosixResult res = AioInterop.IoSubmit(ctxp, sendCount, AioCbsTable);
+
+                        memoryHandles = MemoryHandles;
+                        for (int i = 0; i < memoryHandleCount; i++)
+                        {
+                            memoryHandles[i].Dispose();
+                        }
+
                         if (res != sendCount)
                         {
                             throw new NotSupportedException("Unexpected IoSubmit Send retval " + res);
@@ -888,9 +919,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else
                 {
+                    Span<MemoryHandle> receiveMemoryHandles = MemoryHandles;
                     for (int i = 0; i < sendQueue.Count; i++)
                     {
-                        sendQueue[i].Socket.DoDeferedSend();
+                        sendQueue[i].Socket.DoDeferedSend(receiveMemoryHandles);
                     }
                     sendQueue.Clear();
                 }
