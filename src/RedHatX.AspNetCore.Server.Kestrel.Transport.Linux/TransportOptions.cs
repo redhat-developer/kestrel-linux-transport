@@ -17,9 +17,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         public LinuxTransportOptions()
         {
-            DeferSend = true;
+            AioSend = true;
+            AioReceive = true;
             CheckAvailable = true;
-            ThreadCount = Environment.ProcessorCount;
+
+            // Benchmarking Techempower Json on 24-core machine with hyper threading (ProcessorCount = 48)
+            // shows best performance at ThreadCount 12.
+            // TODO: what happens if hyperthreading is disabled? Perhaps this should be half the cores?
+            // TODO: benchmark more scenarios to validate this is a good default.
+            ThreadCount = Math.Max((Environment.ProcessorCount + 2) / 4, 1);
         }
 
         internal bool ReceiveOnIncomingCpu
@@ -35,7 +41,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public bool DeferAccept
+        internal bool DeferAccept
         {
             get => _deferAccept;
             set
@@ -61,9 +67,9 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public int ZeroCopyThreshold { get; set; } = 10 * 1024; // 10KB
+        internal int ZeroCopyThreshold { get; set; } = 10 * 1024; // 10KB
 
-        public bool ZeroCopy
+        internal bool ZeroCopy
         {
             get => _zeroCopy;
             set
