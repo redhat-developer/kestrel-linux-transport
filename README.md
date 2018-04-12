@@ -22,8 +22,8 @@ Add the myget feed to your `NuGet.Config` file:
 Include a package reference in your project `csproj` file:
 ```xml
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.All" Version="2.0.0" />
-    <PackageReference Include="RedHatX.AspNetCore.Server.Kestrel.Transport.Linux" Version="2.0.0-*" />
+    <PackageReference Include="Microsoft.AspNetCore.All" Version="2.1.0-*" />
+    <PackageReference Include="RedHatX.AspNetCore.Server.Kestrel.Transport.Linux" Version="2.1.0-*" />
   </ItemGroup>
 ```
 
