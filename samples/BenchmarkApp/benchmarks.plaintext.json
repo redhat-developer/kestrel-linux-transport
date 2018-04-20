@@ -1,0 +1,26 @@
+{
+  "Default": {
+    "Client": "Wrk",
+    "PresetHeaders": "Plaintext",
+    "ClientProperties": {
+      "ScriptName": "pipeline",
+      "PipelineDepth": 16
+    },
+    "Source": {
+      "Repository": "https://github.com/redhat-developer/kestrel-linux-transport.git",
+      "BranchOrCommit": "master",
+      "Project": "samples/BenchmarkApp/BenchmarkApp.csproj"
+    },
+    "Port": 8080
+  },
+  "Plaintext": {
+    "Path": "/plaintext"
+  },
+  "PlaintextNonPipelined": {
+    "Path": "/plaintext",
+    "ClientProperties": {
+      "ScriptName": "",
+      "PipelineDepth": 0
+    }
+  }
+}
