@@ -436,10 +436,10 @@ namespace Tests
             // These buffers are echoed back.
             // The clients verify they each receive the random data they sent.
 
+            int connectionCount = 0;
             SemaphoreSlim clientsAcceptedSemaphore = new SemaphoreSlim(0, 1);
             SemaphoreSlim dataSentSemaphore = new SemaphoreSlim(0, 1);
 
-            int connectionCount = 0;
             TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
             {
                 connectionCount++;
@@ -480,9 +480,7 @@ namespace Tests
                 input.Complete();
             };
 
-            using (var testServer = CreateTestServer(options =>
-                                        { options.ConnectionDispatcher = connectionDispatcher;
-                                        }))
+            using (var testServer = CreateTestServer(connectionDispatcher))
             {
                 await testServer.BindAsync();
 
