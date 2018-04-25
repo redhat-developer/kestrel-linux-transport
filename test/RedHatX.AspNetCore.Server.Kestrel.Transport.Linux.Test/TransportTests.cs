@@ -446,10 +446,14 @@ namespace Tests
 
                 if (connectionCount == 3)
                 {
+                    // Ensure we accepted the clients.
                     clientsAcceptedSemaphore.Release();
+
+                    // Now wait for clients to send data.
                     dataSentSemaphore.Wait();
                 }
 
+                // Echo
                 while (true)
                 {
                     var result = await input.ReadAsync();
@@ -461,7 +465,9 @@ namespace Tests
                         break;
                     }
 
+                    // Clients send more data than what fits in a single segment.
                     Assert.True(!request.IsSingleSegment);
+
                     foreach (var memory in request)
                     {
                         output.Write(memory.Span);
@@ -486,23 +492,27 @@ namespace Tests
                     {
                         using (var client3 = testServer.ConnectTo())
                         { }
+
+                        // Wait for all clients to be accepted.
+                        // The TransportThread will now be blocked.
                         clientsAcceptedSemaphore.Wait();
 
+                        // Send data
                         var client1DataSent = new byte[10_000];
                         FillRandom(client1DataSent);
                         var client2DataSent = new byte[10_000];
                         FillRandom(client2DataSent);
-
                         client1.Send(new ArraySegment<byte>(client1DataSent));
                         client2.Send(new ArraySegment<byte>(client2DataSent));
 
+                        // Unblock the TransportThread
                         dataSentSemaphore.Release();
+
+                        // Receive echoed data.
                         var client1DataReceived = new byte[10_000];
                         var client2DataReceived = new byte[10_000];
-
                         client1.Receive(new ArraySegment<byte>(client1DataReceived));
                         client2.Receive(new ArraySegment<byte>(client2DataReceived));
-
                         Assert.Equal(client1DataSent, client1DataReceived);
                         Assert.Equal(client2DataSent, client2DataReceived);
                     }
