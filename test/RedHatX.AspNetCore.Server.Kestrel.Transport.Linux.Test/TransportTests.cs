@@ -429,6 +429,98 @@ namespace Tests
             }
         }
 
+        [Fact]
+        public async Task BatchedSendReceive()
+        {
+            // We block the TransportThread to ensure 2 clients are sending multiple buffers with random data.
+            // These buffers are echoed back.
+            // The clients verify they each receive the random data they sent.
+
+            SemaphoreSlim clientsAcceptedSemaphore = new SemaphoreSlim(0, 1);
+            SemaphoreSlim dataSentSemaphore = new SemaphoreSlim(0, 1);
+
+            int connectionCount = 0;
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            {
+                connectionCount++;
+
+                if (connectionCount == 3)
+                {
+                    clientsAcceptedSemaphore.Release();
+                    dataSentSemaphore.Wait();
+                }
+
+                while (true)
+                {
+                    var result = await input.ReadAsync();
+                    var request = result.Buffer;
+
+                    if (request.IsEmpty && result.IsCompleted)
+                    {
+                        input.AdvanceTo(request.End);
+                        break;
+                    }
+
+                    Assert.True(!request.IsSingleSegment);
+                    foreach (var memory in request)
+                    {
+                        output.Write(memory.Span);
+                    }
+                    await output.FlushAsync();
+                    input.AdvanceTo(request.End);
+                }
+
+                output.Complete();
+                input.Complete();
+            };
+
+            using (var testServer = CreateTestServer(options =>
+                                        { options.ConnectionDispatcher = connectionDispatcher;
+                                        }))
+            {
+                await testServer.BindAsync();
+
+                using (var client1 = testServer.ConnectTo())
+                {
+                    using (var client2 = testServer.ConnectTo())
+                    {
+                        using (var client3 = testServer.ConnectTo())
+                        { }
+                        clientsAcceptedSemaphore.Wait();
+
+                        var client1DataSent = new byte[10_000];
+                        FillRandom(client1DataSent);
+                        var client2DataSent = new byte[10_000];
+                        FillRandom(client2DataSent);
+
+                        client1.Send(new ArraySegment<byte>(client1DataSent));
+                        client2.Send(new ArraySegment<byte>(client2DataSent));
+
+                        dataSentSemaphore.Release();
+                        var client1DataReceived = new byte[10_000];
+                        var client2DataReceived = new byte[10_000];
+
+                        client1.Receive(new ArraySegment<byte>(client1DataReceived));
+                        client2.Receive(new ArraySegment<byte>(client2DataReceived));
+
+                        Assert.Equal(client1DataSent, client1DataReceived);
+                        Assert.Equal(client2DataSent, client2DataReceived);
+                    }
+                }
+
+                await testServer.StopAsync();
+            }
+        }
+
+        private static Random s_random = new System.Random();
+        private void FillRandom(byte[] data)
+        {
+            for (int i = 0; i < data.Length; i++)
+            {
+                data[i] = (byte)s_random.Next(256);
+            }
+        }
+
         private unsafe static void FillBuffer(PipeWriter writer, int count)
         {
             for (int i = 0; i < count; i++)
