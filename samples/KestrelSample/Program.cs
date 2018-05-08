@@ -1,19 +1,20 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Runtime;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal;
 using Benchmarks.Middleware;
 using RedHatX.AspNetCore.Server.Kestrel.Transport.Linux;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
-using System.Linq;
 
 namespace SampleApp
 {
@@ -25,15 +26,25 @@ namespace SampleApp
         {
             var configBuilder = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
+                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false);
             Configuration = configBuilder.Build();
         }
-        public void Configure(IApplicationBuilder app, ILoggerFactory loggerFactory)
+
+        public void ConfigureServices(IServiceCollection services)
         {
             if (_log)
             {
-                loggerFactory.AddConsole(Configuration.GetSection("Logging"));
+                services.AddLogging(builder =>
+                {
+                    builder.AddConfiguration(Configuration.GetSection("Logging"))
+                        .SetMinimumLevel(LogLevel.Debug)
+                        .AddConsole();
+                });
             }
+        }
+
+        public void Configure(IApplicationBuilder app)
+        {
             app.UsePlainText();
             app.UseJson();
             app.Run(async context =>

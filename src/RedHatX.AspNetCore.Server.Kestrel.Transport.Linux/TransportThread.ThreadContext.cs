@@ -66,7 +66,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _transportThread = transportThread;
                 _connectionDispatcher = transportThread.ConnectionDispatcher;
                 _sockets = new Dictionary<int, TSocket>();
-                _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(_transportThread)}.{_transportThread.ThreadId}"); ;
+                _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(RedHatX)}.{nameof(TransportThread)}.{_transportThread.ThreadId}");
                 _acceptSockets = new List<TSocket>();
                 _transportOptions = transportThread.TransportOptions;
                 _scheduledSendAdding = new List<ScheduledSend>(1024);
@@ -436,7 +436,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         DoScheduledWork(_transportOptions.AioSend);
                     } while (running);
 
-                    _logger.LogInformation($"Thread {_transportThread.ThreadId}: Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
+                    _logger.LogDebug($"Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
 
                     CompleteStateChange(TransportThreadState.Stopped);
 

@@ -109,7 +109,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     _threads[i + (acceptThread == null ? 0 : 1)] = transportThreads[i];
                 }
 
-                _logger.LogInformation($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
+                _logger.LogDebug($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
             }
 
             var tasks = new Task[transportThreads.Length];
