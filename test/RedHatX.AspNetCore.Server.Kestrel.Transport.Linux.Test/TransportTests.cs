@@ -101,7 +101,7 @@ namespace Tests
         public async Task StopDisconnectsClient()
         {
             var outputTcs = new TaskCompletionSource<PipeWriter>();
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 outputTcs.SetResult(output);
             };
@@ -146,7 +146,7 @@ namespace Tests
             const int bufferSize = 2048;
             int bytesWritten = 0;
             var waitingForWritable = new TaskCompletionSource<object>();
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 Timer writeTimeout = new Timer(
                     // timeout -> we are waiting for the socket to become writable
@@ -202,14 +202,14 @@ namespace Tests
         {
             const int bufferSize = 2048;
             var waitingForTimeout = new TaskCompletionSource<object>();
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, connection) =>
             {
                 Timer writeTimeout = new Timer(
-                    // timeout -> we are waiting for the socket to become writable
-                    o => output.Complete(new Exception("Write timed out")),
+                    _ => connection.Abort(),
                     null, Timeout.Infinite, Timeout.Infinite
                 );
 
+                Exception exception = null;
                 try
                 {
                     do
@@ -221,12 +221,20 @@ namespace Tests
                         // is no longer writable
                         writeTimeout.Change(1000, Timeout.Infinite);
                         var flushResult = await output.FlushAsync();
+                        if (flushResult.IsCanceled || flushResult.IsCompleted)
+                        {
+                            break;
+                        }
                         // cancel the timeout
                         writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
                     } while (true);
                 }
-                catch
-                { }
+                catch (Exception e)
+                {
+                    exception = e;
+                }
+                Assert.NotNull(exception);
+                Assert.IsType<ConnectionAbortedException>(exception);
 
                 waitingForTimeout.SetResult(null);
 
@@ -253,7 +261,7 @@ namespace Tests
         public async Task CompletingOutputCancelsInput()
         {
             var inputCompletedTcs = new TaskCompletionSource<object>();
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 output.Complete();
                 await input.ReadAsync();
@@ -278,7 +286,7 @@ namespace Tests
             // client send 1M bytes which are an int counter
             // server receives and checkes the counting
             const int receiveLength = 1000000;
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 int bytesReceived = 0;
                 int remainder = 0; // remaining bytes between ReadableBuffers
@@ -328,7 +336,7 @@ namespace Tests
             // server send 1M bytes which are an int counter
             // client receives and checkes the counting
             const int sendLength = 1_000_000;
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 FillBuffer(output, sendLength / 4);
                 await output.FlushAsync();
@@ -369,7 +377,7 @@ namespace Tests
         [Fact]
         public async Task UnixSocketListenType()
         {
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 int threadId = Thread.CurrentThread.ManagedThreadId;
                 var data = Encoding.UTF8.GetBytes(threadId.ToString());
@@ -442,7 +450,7 @@ namespace Tests
             SemaphoreSlim clientsAcceptedSemaphore = new SemaphoreSlim(0, 1);
             SemaphoreSlim dataSentSemaphore = new SemaphoreSlim(0, 1);
 
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output) =>
+            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 connectionCount++;
 

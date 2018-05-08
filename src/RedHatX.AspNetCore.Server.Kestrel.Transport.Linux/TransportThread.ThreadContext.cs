@@ -577,7 +577,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 foreach (var kv in clone)
                 {
                     var tsocket = kv.Value;
-                    tsocket.Stop();
+                    tsocket.Abort();
                 }
             }
 

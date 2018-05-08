@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Tests
 {
-    public delegate void TestServerConnectionDispatcher(PipeReader input, PipeWriter output);
+    public delegate void TestServerConnectionDispatcher(PipeReader input, PipeWriter output, TransportConnection connection);
 
     public class TestServerOptions
     {
@@ -119,7 +119,7 @@ namespace Tests
             var input = new Pipe(GetInputPipeOptions(memoryPool, connection.InputWriterScheduler));
             var output = new Pipe(GetOutputPipeOptions(memoryPool, connection.OutputReaderScheduler));
 
-            _connectionDispatcher(input.Reader, output.Writer);
+            _connectionDispatcher(input.Reader, output.Writer, connection);
 
             connection.Transport = new DuplexPipe(input.Reader, output.Writer);
             connection.Application = new DuplexPipe(output.Reader, input.Writer);
@@ -154,7 +154,7 @@ namespace Tests
             Assert.True(stopTask.IsCompleted);
         }
 
-        public static async void Echo(PipeReader input, PipeWriter output)
+        public static async void Echo(PipeReader input, PipeWriter output, TransportConnection connection)
         {
             try
             {

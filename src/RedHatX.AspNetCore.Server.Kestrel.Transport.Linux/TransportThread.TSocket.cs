@@ -67,6 +67,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly Action       _onFlushedToApp;
             private readonly Action       _onReadFromApp;
             private readonly MemoryHandle[] _sendMemoryHandles;
+            private readonly CancellationTokenSource _connectionClosedTokenSource;
 
             public int                     ZeroCopyThreshold;
 
@@ -76,6 +77,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private ValueTaskAwaiter<FlushResult> _flushAwaiter;
             private int                   _zeropCopyState;
             private SequencePosition      _zeroCopyEnd;
+            private long                  _totalBytesWritten;
 
             public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
             {
@@ -84,11 +86,15 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _flags = flags;
                 _onFlushedToApp = new Action(OnFlushedToApp);
                 _onReadFromApp = new Action(OnReadFromApp);
+                _connectionClosedTokenSource = new CancellationTokenSource();
+                ConnectionClosed = _connectionClosedTokenSource.Token;
                 if (!IsDeferSend)
                 {
                     _sendMemoryHandles = new MemoryHandle[MaxIOVectorSendLength];
                 }
             }
+
+            public override long TotalBytesWritten => Interlocked.Read(ref _totalBytesWritten);
 
             public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
 
@@ -107,6 +113,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 get => (EPollEvents)_flags;
                 set => _flags = (SocketFlags)value;
+            }
+
+            public override void Abort()
+            {
+                CancelWriteToSocket();
             }
 
             private void CancelWriteToSocket()
@@ -296,6 +307,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     _zeroCopyEnd = end;
                     return WaitZeroCopyComplete(loop, zeroCopyRegistered);
                 }
+                if (result.Value > 0)
+                {
+                    Interlocked.Add(ref _totalBytesWritten, result.Value);
+                }
                 // We need to call Advance to end the read
                 Output.AdvanceTo(end);
                 if (!loop)
@@ -383,7 +398,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 if (stopped)
                 {
-                    CompleteOutput(null);
+                    CompleteOutput(new ConnectionAbortedException());
                 }
                 else
                 {
@@ -406,15 +421,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private static void CompleteWriteToSocket(Exception ex, object state)
-            {
-                if (ex != null)
-                {
-                    var tsocket = (TSocket)state;
-                    tsocket.CancelWriteToSocket();
-                }
-            }
-
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void CleanupSocketEnd()
             {
@@ -434,6 +440,14 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 // We get here when both reading and writing has stopped
                 // so we are sure this is the last use of the Socket.
                 Close();
+
+                ThreadPool.QueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
+            }
+
+            private void CancelConnectionClosedToken()
+            {
+                _connectionClosedTokenSource.Cancel();
+                _connectionClosedTokenSource.Dispose();
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -750,13 +764,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public void Start(bool dataMayBeAvailable)
             {
-                Output.OnWriterCompleted(CompleteWriteToSocket, this);
                 ReadFromApp();
                 // TODO: implement dataMayBeAvailable
                 ReceiveFromSocket();
             }
-
-            public void Stop() => CancelWriteToSocket();
 
             public override MemoryPool<byte> MemoryPool => _threadContext.MemoryPool;
 
