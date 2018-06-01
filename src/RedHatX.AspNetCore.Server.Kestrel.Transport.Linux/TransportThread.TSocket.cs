@@ -72,7 +72,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             public int                     ZeroCopyThreshold;
 
             private SocketFlags           _flags;
-            private Exception             _inputCompleteError;
             private ValueTaskAwaiter<ReadResult>  _readAwaiter;
             private ValueTaskAwaiter<FlushResult> _flushAwaiter;
             private int                   _zeropCopyState;
@@ -150,7 +149,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            private void CancelReadFromSocket(Exception exception)
+            private void CancelReadFromSocket()
             {
                 bool completeReadable = false;
                 lock (Gate)
@@ -166,12 +165,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     flags &= ~SocketFlags.AwaitReadable;
                     flags |= SocketFlags.ReadCanceled;
-                    _inputCompleteError = exception;
                     _flags = flags;
                 }
                 if (completeReadable)
                 {
-                    CompleteInput(exception);
+                    CompleteInput(new ConnectionAbortedException());
                 }
             }
 
@@ -369,10 +367,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 return loop;
             }
 
-            public void CompleteOutput(Exception error)
+            public void CompleteOutput(Exception outputError)
             {
-                Output.Complete(error);
-                CancelReadFromSocket(error);
+                Output.Complete(outputError);
+                CancelReadFromSocket();
                 CleanupSocketEnd();
             }
 
@@ -398,7 +396,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 if (stopped)
                 {
-                    CompleteOutput(new ConnectionAbortedException());
+                    CompleteOutput(null);
                 }
                 else
                 {
@@ -591,7 +589,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 if (stopped)
                 {
-                    CompleteInput(_inputCompleteError);
+                    CompleteInput(new ConnectionAbortedException());
                 }
             }
 
@@ -657,7 +655,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     if (flushResult.IsCompleted || // Reader has stopped
                         flushResult.IsCanceled)   // TransportThread has stopped
                     {
-                        error = new ConnectionAbortedException();
+                        error = TransportConstants.StopSentinel;
                     }
                 }
                 catch (Exception e)
@@ -670,6 +668,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 else
                 {
+                    if (error == TransportConstants.StopSentinel)
+                    {
+                        error = null;
+                    }
                     CompleteInput(error);
                 }
             }

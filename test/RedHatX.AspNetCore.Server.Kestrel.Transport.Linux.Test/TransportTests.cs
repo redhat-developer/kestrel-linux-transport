@@ -209,32 +209,22 @@ namespace Tests
                     null, Timeout.Infinite, Timeout.Infinite
                 );
 
-                Exception exception = null;
-                try
+                do
                 {
-                    do
-                    {
-                        var memory = output.GetMemory(bufferSize);
-                        output.Advance(bufferSize);
+                    var memory = output.GetMemory(bufferSize);
+                    output.Advance(bufferSize);
 
-                        // If it takes 1 second to write, assume the socket
-                        // is no longer writable
-                        writeTimeout.Change(1000, Timeout.Infinite);
-                        var flushResult = await output.FlushAsync();
-                        if (flushResult.IsCanceled || flushResult.IsCompleted)
-                        {
-                            break;
-                        }
-                        // cancel the timeout
-                        writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
-                    } while (true);
-                }
-                catch (Exception e)
-                {
-                    exception = e;
-                }
-                Assert.NotNull(exception);
-                Assert.IsType<ConnectionAbortedException>(exception);
+                    // If it takes 1 second to write, assume the socket
+                    // is no longer writable
+                    writeTimeout.Change(1000, Timeout.Infinite);
+                    var flushResult = await output.FlushAsync();
+                    if (flushResult.IsCanceled || flushResult.IsCompleted)
+                    {
+                        break;
+                    }
+                    // cancel the timeout
+                    writeTimeout.Change(Timeout.Infinite, Timeout.Infinite);
+                } while (true);
 
                 waitingForTimeout.SetResult(null);
 
@@ -264,7 +254,16 @@ namespace Tests
             TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
             {
                 output.Complete();
-                await input.ReadAsync();
+                bool exceptionThrown = true;
+                try
+                {
+                    await input.ReadAsync();
+                }
+                catch (ConnectionAbortedException)
+                {
+                    exceptionThrown = true;
+                }
+                Assert.True(exceptionThrown);
                 inputCompletedTcs.SetResult(null);
             };
 
