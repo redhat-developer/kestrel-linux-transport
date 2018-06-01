@@ -844,7 +844,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         Exception error = socket.GetReadResult(out buffer);
                         if (error != null)
                         {
-                            socket.CompleteOutput(error == TransportConstants.StopSentinel ? null : error);
+                            if (error == TransportConstants.StopSentinel)
+                            {
+                                error = null;
+                            }
+                            socket.CompleteOutput(error);
                             completedCount++;
                         }
                         else
