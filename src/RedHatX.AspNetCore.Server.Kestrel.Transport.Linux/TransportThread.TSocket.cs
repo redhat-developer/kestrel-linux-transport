@@ -41,25 +41,26 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
         class TSocket : TransportConnection
         {
+            public struct ReceiveMemoryAllocation
+            {
+                public int FirstMemorySize;
+                public int IovLength;
+            }
+
             private const int ZeroCopyNone = 0;
             private const int ZeroCopyComplete = 1;
             private const int ZeroCopyAwait = 2;
-            private const int MinAllocBufferSize = 2048;
             private const int MSG_ZEROCOPY = 0x4000000;
+            private const int CheckAvailable = -1;
+            private const int CheckAvailableIgnoreReceived = -2;
             // 8 IOVectors, take up 128B of stack, can receive/send up to 32KB
             public const int MaxIOVectorSendLength = 8;
             public const int MaxIOVectorReceiveLength = 8;
             private const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
             public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
 
-            private static readonly int MaxPooledBlockLength;
-            static TSocket()
-            {
-                using (var memoryPool = KestrelMemoryPool.Create())
-                {
-                    MaxPooledBlockLength = memoryPool.MaxBufferSize;
-                }
-            }
+            private static readonly int MaxBufferSize = KestrelMemoryPool.MinimumSegmentSize;
+            private static readonly int BufferMargin = MaxBufferSize / 4;
 
             public readonly object         Gate = new object();
             private readonly ThreadContext _threadContext;
@@ -77,6 +78,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             private int                   _zeropCopyState;
             private SequencePosition      _zeroCopyEnd;
             private long                  _totalBytesWritten;
+            private int                   _readState = CheckAvailable;
 
             public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
             {
@@ -449,51 +451,38 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe int FillReceiveIOVector(int availableBytes, IOVector* ioVectors, Span<MemoryHandle> handles, ref int ioVectorLength)
+            public unsafe int FillReceiveIOVector(ReceiveMemoryAllocation memoryAllocation, IOVector* ioVectors, Span<MemoryHandle> handles)
             {
                 PipeWriter writer = Input;
-                Memory<byte> memory = writer.GetMemory(MinAllocBufferSize);
-                var allocated = 0;
+                int advanced = 0;
+                Memory<byte> memory = writer.GetMemory(memoryAllocation.FirstMemorySize);
+                int length = memory.Length;
 
-                var advanced = 0;
-                int ioVectorsUsed = 0;
-                for (; ioVectorsUsed < ioVectorLength; ioVectorsUsed++)
+                for (int i = 0; i < memoryAllocation.IovLength; i++)
                 {
-                    var length = memory.Length;
                     var bufferHandle = memory.Pin();
-                    ioVectors[ioVectorsUsed].Base = bufferHandle.Pointer;
-                    ioVectors[ioVectorsUsed].Count = (void*)length;
-                    handles[ioVectorsUsed] = bufferHandle;
-                    allocated += length;
+                    ioVectors[i].Base = bufferHandle.Pointer;
+                    ioVectors[i].Count = (void*)length;
+                    handles[i] = bufferHandle;
 
-                    if (allocated >= availableBytes)
+                    // Every Memory (except the last one) must be filled completely.
+                    if (i != (memoryAllocation.IovLength - 1))
                     {
-                        // Every Memory (except the last one) must be filled completely.
-                        ioVectorsUsed++;
-                        break;
+                        writer.Advance(length);
+                        advanced += length;
+                        memory = writer.GetMemory(MaxBufferSize);
+                        length = MaxBufferSize;
                     }
-
-                    writer.Advance(length);
-                    advanced += length;
-                    memory = writer.GetMemory(1);
                 }
-                ioVectorLength = ioVectorsUsed;
+
                 return advanced;
             }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public int CalcIOVectorLengthForReceive(int availableBytes, int maxLength)
+            public unsafe PosixResult Receive(Span<MemoryHandle> handles)
             {
-                Memory<byte> memory = Input.GetMemory(MinAllocBufferSize);
-                return availableBytes <= memory.Length ? 1 :
-                       Math.Min(1 + (availableBytes - memory.Length + MaxPooledBlockLength - 1) / MaxPooledBlockLength, maxLength);
-            }
-
-            public unsafe PosixResult Receive(int availableBytes, Span<MemoryHandle> handles)
-            {
-                int ioVectorLength = CalcIOVectorLengthForReceive(availableBytes, MaxIOVectorReceiveLength);
-                var ioVectors = stackalloc IOVector[ioVectorLength];
-                int advanced = FillReceiveIOVector(availableBytes, ioVectors, handles, ref ioVectorLength);
+                ReceiveMemoryAllocation memoryAllocation = DetermineMemoryAllocationForReceive(MaxIOVectorReceiveLength);
+                var ioVectors = stackalloc IOVector[memoryAllocation.IovLength];
+                int advanced = FillReceiveIOVector(memoryAllocation, ioVectors, handles);
 
                 try
                 {
@@ -508,8 +497,8 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     var received = 0;
                     do
                     {
-                        var result = SocketInterop.Receive(Fd, ioVectors, ioVectorLength);
-                        (bool done, PosixResult retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, ioVectorLength);
+                        var result = SocketInterop.Receive(Fd, ioVectors, memoryAllocation.IovLength);
+                        (bool done, PosixResult retval) = InterpretReceiveResult(result, ref received, advanced, ioVectors, memoryAllocation.IovLength);
                         if (done)
                         {
                             return retval;
@@ -530,7 +519,7 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 finally
                 {
-                    for (int i = 0; i < ioVectorLength; i++)
+                    for (int i = 0; i < memoryAllocation.IovLength; i++)
                     {
                         handles[i].Dispose();
                     }
@@ -547,7 +536,26 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                     if (received >= advanced)
                     {
                         // We made it!
-                        writer.Advance(received - advanced);
+                        int finalAdvance = received - advanced;
+                        int spaceRemaining = (int)(ioVectors[ioVectorLength - 1].Count) - finalAdvance;
+                        if (spaceRemaining == 0)
+                        {
+                            // We used up all room, assume there is a remainder to be read.
+                            _readState = CheckAvailableIgnoreReceived;
+                        }
+                        else
+                        {
+                            if (_readState == CheckAvailableIgnoreReceived)
+                            {
+                                // We've read the remainder.
+                                _readState = CheckAvailable;
+                            }
+                            else
+                            {
+                                _readState = received;
+                            }
+                        }
+                        writer.Advance(finalAdvance);
                         return (true, new PosixResult(received == 0 ? 0 : 1));
                     }
                     // Update ioVectors to match bytes read
@@ -782,6 +790,50 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
 
             public unsafe PosixResult TryAccept(out int socket, bool blocking)
                 => SocketInterop.Accept(Fd, null, 0, blocking, out socket);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public ReceiveMemoryAllocation DetermineMemoryAllocationForReceive(int maxIovLength)
+            {
+                // In this function we try to avoid the 'GetAvailableBytes' system call.
+                // If we read a small amount previously, we assume a single buffer is enough.
+                int reserve = 0;
+                int state = _readState;
+                if (state > 0) // state is amount of bytes read previously
+                {
+                    // Make a guess based on what we read previously.
+                    if (state + BufferMargin <= MaxBufferSize)
+                    {
+                        reserve = state + BufferMargin;
+                    }
+                    else if (state <= MaxBufferSize)
+                    {
+                        reserve = MaxBufferSize;
+                    }
+                }
+                if (reserve == 0)
+                {
+                    // We didn't make a guess, get the available bytes.
+                    reserve = GetAvailableBytes();
+                    if (reserve == 0)
+                    {
+                        reserve = MaxBufferSize / 2;
+                    }
+                }
+                // We need to make sure we can at least fill (IovLength -1) IOVs.
+                // So if we are guessing, we can only return 1 IOV.
+                // If we read GetAvailableBytes, we can return 1 IOV more than we need exactly.
+                if (reserve <= MaxBufferSize)
+                {
+                    return new ReceiveMemoryAllocation { FirstMemorySize = reserve, IovLength = 1 };
+                }
+                else
+                {
+                    Memory<byte> memory =  Input.GetMemory(MaxBufferSize / 2);
+                    int firstMemory = memory.Length;
+                    int iovLength = Math.Min(1 + (reserve - memory.Length + MaxBufferSize - 1) / MaxBufferSize, maxIovLength);
+                    return new ReceiveMemoryAllocation { FirstMemorySize = firstMemory, IovLength = iovLength };
+                }
+            }
 
             public int GetAvailableBytes()
             {
