@@ -379,13 +379,11 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         statReadEvents += readableSockets.Count;
                         if (!_transportOptions.AioReceive)
                         {
-                            bool checkAvailable = _transportOptions.CheckAvailable;
                             Span<MemoryHandle> receiveMemoryHandles = MemoryHandles;
                             for (int i = 0; i < readableSockets.Count; i++)
                             {
                                 TSocket socket = readableSockets[i];
-                                int availableBytes = !checkAvailable ? 0 : socket.GetAvailableBytes();
-                                var receiveResult = socket.Receive(availableBytes, receiveMemoryHandles);
+                                var receiveResult = socket.Receive(receiveMemoryHandles);
                                 socket.OnReceiveFromSocket(receiveResult);
                             }
                             readableSockets.Clear();
@@ -458,26 +456,24 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 AioCb* aioCb = AioCbs;
                 IOVector* ioVectors = IoVectorTable;
                 PosixResult* receiveResults = stackalloc PosixResult[readableSocketCount];
-                bool checkAvailable = _transportOptions.CheckAvailable;
                 Span<MemoryHandle> receiveMemoryHandles = MemoryHandles;
                 int receiveMemoryHandleCount = 0;
                 for (int i = 0; i < readableSocketCount; i++)
                 {
                     TSocket socket = readableSockets[i];
-                    int availableBytes = !checkAvailable ? 0 : socket.GetAvailableBytes();
-                    int ioVectorLength = socket.CalcIOVectorLengthForReceive(availableBytes, IoVectorsPerAioSocket);
-                    int advanced = socket.FillReceiveIOVector(availableBytes, ioVectors, receiveMemoryHandles, ref ioVectorLength);
+                    var memoryAllocation = socket.DetermineMemoryAllocationForReceive(IoVectorsPerAioSocket);
+                    int advanced = socket.FillReceiveIOVector(memoryAllocation, ioVectors, receiveMemoryHandles);
 
                     aioCb->Fd = socket.Fd;
-                    aioCb->Data = PackReceiveState(0, advanced, ioVectorLength);
+                    aioCb->Data = PackReceiveState(0, advanced, memoryAllocation.IovLength);
                     aioCb->OpCode = AioOpCode.PReadv;
                     aioCb->Buffer = ioVectors;
-                    aioCb->Length = ioVectorLength;
+                    aioCb->Length = memoryAllocation.IovLength;
                     aioCb++;
 
-                    ioVectors += ioVectorLength;
-                    receiveMemoryHandleCount += ioVectorLength;
-                    receiveMemoryHandles = receiveMemoryHandles.Slice(ioVectorLength);
+                    ioVectors += memoryAllocation.IovLength;
+                    receiveMemoryHandleCount += memoryAllocation.IovLength;
+                    receiveMemoryHandles = receiveMemoryHandles.Slice(memoryAllocation.IovLength);
                 }
                 int eAgainCount = 0;
                 while (readableSocketCount > 0)

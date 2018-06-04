@@ -19,7 +19,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
         {
             AioSend = true;
             AioReceive = true;
-            CheckAvailable = true;
 
             // Benchmarking Techempower Json on 24-core machine with hyper threading (ProcessorCount = 48)
             // shows best performance at ThreadCount 12.
@@ -81,8 +80,6 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                 _zeroCopy = value;
             }
         }
-
-        public bool CheckAvailable { get; set; } = true;
 
         public bool AioReceive { get; set; } = false;
 

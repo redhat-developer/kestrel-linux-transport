@@ -20,7 +20,6 @@ namespace Tests
     {
         public int ThreadCount { get; set; } = 1;
         public bool DeferAccept { get; set; } = false;
-        public bool CheckAvailable { get; set; } = true;
         public TestServerConnectionDispatcher ConnectionDispatcher { get; set; } = TestServer.Echo;
         public string UnixSocketPath { get; set; }
         public IPEndPoint IPEndPoint { get; set; }
@@ -66,7 +65,6 @@ namespace Tests
             {
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept,
-                CheckAvailable = options.CheckAvailable,
                 AioReceive = options.AioReceive,
                 AioSend = options.AioSend
             };
