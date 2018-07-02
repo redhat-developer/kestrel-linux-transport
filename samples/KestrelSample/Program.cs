@@ -130,7 +130,7 @@ namespace SampleApp
             }
             else if (sock)
             {
-                System.Console.WriteLine("Using Sockets");
+                System.Console.WriteLine($"Using Sockets: IOQueueCount={threadCount}");
             }
             else
             {
@@ -150,7 +150,9 @@ namespace SampleApp
                 hostBuilder = hostBuilder.UseLibuv(options => options.ThreadCount = threadCount);
             }
             else if (sock)
-            { }
+            {
+                hostBuilder = hostBuilder.UseSockets(options => options.IOQueueCount = threadCount);
+            }
             else
             {
                 hostBuilder = hostBuilder.UseLinuxTransport(options =>
