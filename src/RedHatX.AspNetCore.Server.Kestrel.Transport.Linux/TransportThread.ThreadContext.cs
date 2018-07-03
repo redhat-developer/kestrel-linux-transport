@@ -551,16 +551,16 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
                         readableSocketCount = 0;
                     }
                 }
-                for (int i = 0; i < readableSockets.Count; i++)
-                {
-                    readableSockets[i].OnReceiveFromSocket(receiveResults[i]);
-                }
-                readableSockets.Clear();
                 receiveMemoryHandles = MemoryHandles;
                 for (int i = 0; i < receiveMemoryHandleCount; i++)
                 {
                     receiveMemoryHandles[i].Dispose();
                 }
+                for (int i = 0; i < readableSockets.Count; i++)
+                {
+                    readableSockets[i].OnReceiveFromSocket(receiveResults[i]);
+                }
+                readableSockets.Clear();
             }
 
             private void StopSockets()
