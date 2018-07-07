@@ -76,6 +76,6 @@ The Transport has these options:
 - **DeferSend**: This defers sends to the Transport Thread which increases chances for multiple sends to coalesce. This options
 defaults to true.
 
-- **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number of logical processors in the system divided by 4.
+- **ThreadCount**: Specifies the number of Transport Threads. This defaults to the number of logical processors in the system, maxed to 16.
 
 - **AioSend/AioReceive**: Uses Linux AIO system calls to batch send and receive calls. AioSend implies DeferSend. These options default to true.
