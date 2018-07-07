@@ -20,11 +20,10 @@ namespace RedHatX.AspNetCore.Server.Kestrel.Transport.Linux
             AioSend = true;
             AioReceive = true;
 
-            // Benchmarking Techempower Json on 24-core machine with hyper threading (ProcessorCount = 48)
-            // shows best performance at ThreadCount 12.
-            // TODO: what happens if hyperthreading is disabled? Perhaps this should be half the cores?
-            // TODO: benchmark more scenarios to validate this is a good default.
-            ThreadCount = Math.Max((Environment.ProcessorCount + 2) / 4, 1);
+            // Use a default ThreadCount that wont cause the number of threads
+            // to be a bottleneck.
+            // Users that want to optimize, should do their own benchmarks.
+            ThreadCount = Math.Min(Environment.ProcessorCount, 16);
         }
 
         internal bool ReceiveOnIncomingCpu
