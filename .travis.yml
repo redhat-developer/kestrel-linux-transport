@@ -18,10 +18,10 @@ before_install:
 - sudo ln -s /opt/dotnet/dotnet /usr/bin/dotnet
 script:
 - pushd samples/KestrelSample && dotnet restore && dotnet build && popd
-- pushd test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test && dotnet restore && dotnet test && popd
-- dotnet pack src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$(date +"%y%m%d")-$TRAVIS_BUILD_NUMBER"
+- pushd test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Test && dotnet restore && dotnet test && popd
+- dotnet pack src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$(date +"%y%m%d")-$TRAVIS_BUILD_NUMBER"
   --output .
 after_success:
 - 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
-  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.*.nupkg
+  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.*.nupkg
   https://www.myget.org/F/redhat-dotnet/api/v2/package ; fi'

@@ -226,4 +226,4 @@ endfunction()
 
 include(configure.cmake)
 
-add_subdirectory(RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Native)
+add_subdirectory(RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native)
