@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp2.0</TargetFramework>
+    <DebugType>portable</DebugType>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.csproj" />
+  </ItemGroup>
+
+</Project>

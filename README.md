@@ -22,8 +22,8 @@ Add the myget feed to your `NuGet.Config` file:
 Include a package reference in your project `csproj` file:
 ```xml
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.App" Version="2.1.1-*" />
-    <PackageReference Include="RedHatX.AspNetCore.Server.Kestrel.Transport.Linux" Version="2.1.1-*" />
+    <PackageReference Include="Microsoft.AspNetCore.App" Version="2.1.0-*" />
+    <PackageReference Include="RedHat.AspNetCore.Server.Kestrel.Transport.Linux" Version="2.1.0-*" />
   </ItemGroup>
 ```
 
@@ -41,20 +41,20 @@ public static IWebHost BuildWebHost(string[] args) =>
 # Repo structure
 
 There are 5 projects in this repository:
-- src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux: managed library implementing Transport
-- src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Native: native library used by managed library
+- src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux: managed library implementing Transport
+- src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native: native library used by managed library
 - samples/KestrelSample: Kestrel app for [benchmarking](Benchmark.md)
-- test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test: xunit test projects, has access to internals of managed library
-- test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.TestApp: empty application to use during development, has access to internals of managed library
+- test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Test: xunit test projects, has access to internals of managed library
+- test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.TestApp: empty application to use during development, has access to internals of managed library
 
-The library can be packaged by running the `dotnet pack` on src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.
+The library can be packaged by running the `dotnet pack` on src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.
 ```
-$ dotnet pack src/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release
+$ dotnet pack src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release
 ```
 
-To build the library and run the tests execute `dotnet test` on test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test.
+To build the library and run the tests execute `dotnet test` on test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Test.
 ```
-$ dotnet test test/RedHatX.AspNetCore.Server.Kestrel.Transport.Linux.Test
+$ dotnet test test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Test
 ```
 
 # Design
