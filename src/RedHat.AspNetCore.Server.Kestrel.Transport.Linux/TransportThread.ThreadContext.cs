@@ -803,18 +803,19 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            public void RemoveSocket(int tsocketKey)
+            public bool RemoveSocket(int tsocketKey)
             {
                 var sockets = _sockets;
                 lock (sockets)
                 {
-                    var initialCount = sockets.Count;
                     sockets.Remove(tsocketKey);
-                    if (sockets.Count == 0)
-                    {
-                        _pipeEnds.WriteEnd.WriteByte(PipeStopThread);
-                    }
+                    return sockets.Count == 0;
                 }
+            }
+
+            public void StopThread()
+            {
+                _pipeEnds.WriteEnd.WriteByte(PipeStopThread);
             }
 
             private void CompleteStateChange(TransportThreadState state, Exception error = null)
@@ -930,12 +931,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             private void CloseAccept()
             {
+                bool lastSocket = false;
                 var acceptSockets = _acceptSockets;
                 lock (_sockets)
                 {
                     for (int i = 0; i < acceptSockets.Count; i++)
                     {
-                        RemoveSocket(acceptSockets[i].Fd);
+                        lastSocket = RemoveSocket(acceptSockets[i].Fd);
                     }
                 }
                 for (int i = 0; i < acceptSockets.Count; i++)
@@ -945,6 +947,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 acceptSockets.Clear();
                 CompleteStateChange(TransportThreadState.AcceptClosed);
+                if (lastSocket)
+                {
+                    StopThread();
+                }
             }
 
             // must be called under tsocket.Gate
