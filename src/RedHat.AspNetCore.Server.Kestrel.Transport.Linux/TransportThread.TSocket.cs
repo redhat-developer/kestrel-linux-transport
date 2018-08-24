@@ -435,7 +435,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
 
                 // First remove from the Dictionary, so we can't match with a new fd.
-                _threadContext.RemoveSocket(Fd);
+                bool lastSocket = _threadContext.RemoveSocket(Fd);
 
                 // We are not using SafeHandles to increase performance.
                 // We get here when both reading and writing has stopped
@@ -448,6 +448,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 // Only called after connection middleware is complete which means the ConnectionClosed token has fired.
                 await MiddlewareTask;
                 _connectionClosedTokenSource.Dispose();
+
+                if (lastSocket)
+                {
+                    _threadContext.StopThread();
+                }
             }
 
             private void CancelConnectionClosedToken()
