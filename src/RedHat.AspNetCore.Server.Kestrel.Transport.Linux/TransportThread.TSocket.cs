@@ -434,14 +434,20 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
 
                 // First remove from the Dictionary, so we can't match with a new fd.
-                _threadContext.RemoveSocket(Fd);
+                bool lastSocket = _threadContext.RemoveSocket(Fd);
 
                 // We are not using SafeHandles to increase performance.
                 // We get here when both reading and writing has stopped
                 // so we are sure this is the last use of the Socket.
                 Close();
 
+                // Inform the application.
                 ThreadPool.QueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
+
+                if (lastSocket)
+                {
+                    _threadContext.StopThread();
+                }
             }
 
             private void CancelConnectionClosedToken()
