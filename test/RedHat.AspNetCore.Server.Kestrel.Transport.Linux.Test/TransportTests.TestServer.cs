@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Tests
 {
-    public delegate void TestServerConnectionDispatcher(PipeReader input, PipeWriter output, TransportConnection connection);
+    public delegate Task TestServerConnectionDispatcher(PipeReader input, PipeWriter output, TransportConnection connection);
 
     public class TestServerOptions
     {
@@ -111,16 +111,34 @@ namespace Tests
             return _transport.StopAsync();
         }
 
-        public void OnConnection(TransportConnection connection)
+        public async Task OnConnection(TransportConnection connection)
         {
             var memoryPool = connection.MemoryPool;
             var input = new Pipe(GetInputPipeOptions(memoryPool, connection.InputWriterScheduler));
             var output = new Pipe(GetOutputPipeOptions(memoryPool, connection.OutputReaderScheduler));
 
-            _connectionDispatcher(input.Reader, output.Writer, connection);
-
             connection.Transport = new DuplexPipe(input.Reader, output.Writer);
             connection.Application = new DuplexPipe(output.Reader, input.Writer);
+
+            // Handle the connection
+            await _connectionDispatcher(input.Reader, output.Writer, connection);
+
+            // Wait for the transport to close
+            await CancellationTokenAsTask(connection.ConnectionClosed);
+        }
+
+        private static Task CancellationTokenAsTask(CancellationToken token)
+        {
+            if (token.IsCancellationRequested)
+            {
+                return Task.CompletedTask;
+            }
+
+            // Transports already dispatch prior to tripping ConnectionClosed
+            // since application code can register to this token.
+            var tcs = new TaskCompletionSource<object>();
+            token.Register(state => ((TaskCompletionSource<object>)state).SetResult(null), tcs);
+            return tcs.Task;
         }
 
         // copied from Kestrel
@@ -152,7 +170,7 @@ namespace Tests
             Assert.True(stopTask.IsCompleted);
         }
 
-        public static async void Echo(PipeReader input, PipeWriter output, TransportConnection connection)
+        public static async Task Echo(PipeReader input, PipeWriter output, TransportConnection connection)
         {
             try
             {
