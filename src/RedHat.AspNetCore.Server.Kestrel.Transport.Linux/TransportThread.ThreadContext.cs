@@ -645,7 +645,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         return 0;
                     }
 
-                    _connectionDispatcher.OnConnection(tsocket);
+                    tsocket.MiddlewareTask = _connectionDispatcher.OnConnection(tsocket);
 
                     lock (_sockets)
                     {
