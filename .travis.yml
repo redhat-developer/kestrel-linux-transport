@@ -23,5 +23,5 @@ script:
   --output .
 after_success:
 - 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
-  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.*.nupkg
+  curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T RedHat.AspNetCore.Server.Kestrel.Transport.Linux.*.nupkg
   https://www.myget.org/F/redhat-dotnet/api/v2/package ; fi'
