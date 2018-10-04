@@ -79,6 +79,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private SequencePosition      _zeroCopyEnd;
             private long                  _totalBytesWritten;
             private int                   _readState = CheckAvailable;
+            public  Task                   MiddlewareTask;
 
             public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
             {
@@ -422,7 +423,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private void CleanupSocketEnd()
+            private async void CleanupSocketEnd()
             {
                 lock (Gate)
                 {
@@ -441,7 +442,12 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 // so we are sure this is the last use of the Socket.
                 Close();
 
-                ThreadPool.QueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
+                // Inform the application.
+                ThreadPool.UnsafeQueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
+
+                // Only called after connection middleware is complete which means the ConnectionClosed token has fired.
+                await MiddlewareTask;
+                _connectionClosedTokenSource.Dispose();
             }
 
             private void CancelConnectionClosedToken()

@@ -12,7 +12,7 @@ env:
     - secure: "LK5FHdPiguTxnhEpOHIabuO7CBYCwCH6liJad+6NooqbTYfhFfwArAVWRS6MsJ4JXMZEI6JTHH9z9be/U1c2TplHUBuWubNIHSioE2jp1fsdXFMMxk1BZSSe9uaT2hSrS+8QKnWHazVISBsbYakgsiKrhY7dlhkKdjBCqR+hQdNwnZVTs8hVUZxASye59aM8LMtonnYhqSjq3Wbt3hmBs+tqTQRpUH1m5uiWeXg1HE0Ccv+TMXPUdiLUEGquNx1FHaS2Kskl8ij5Ya50v/ujD8SgxbAFaf66nnk8InVDfA+XKsu5t4IayprY0yw0FvKJ9DzDNoNLbWFJv3Ak2J002CF+5L+GSZt/j1mPEfU7sBkxORplyi7NreFcSwcK8xSxsJkbDa6kNNAL3APHn1QzVaOh5JKOFWfkz5V/USWDiBCPzTA1Ly9O5JjCR9gla+t827Hj63lcDE3c05wD4NTchoyKi2Fdtf8XY4QcsAuonKCmFSBf2U0utG181g1JcVA1/lN+hM7tKrk0m/ZbTmZ8XkqH0+K/0k3ezhQNLZ13Q2lYmHXmU9+ONyFMAdKJ+BSCe/2bkFh5+c9sXrFp0GPzWvnP9FerMkbNqx68hdtUoflUaYfrG9XVI6mFH+H+YE17Jysc70U1FATRaKOLiu0KLrmsj2pxdghWg4fR0rbRjyU="
 
 before_install:
-- wget https://download.microsoft.com/download/D/0/4/D04C5489-278D-4C11-9BD3-6128472A7626/dotnet-sdk-2.1.301-linux-x64.tar.gz -O dotnet-sdk-latest-linux-x64.tar.gz
+- wget https://download.microsoft.com/download/D/5/9/D593CD8F-04E7-425D-962C-86FF4C90B1DA/dotnet-sdk-2.2.100-preview2-009404-linux-x64.tar.gz -O dotnet-sdk-latest-linux-x64.tar.gz
 - sudo mkdir /opt/dotnet
 - sudo tar xvf dotnet-sdk-latest-linux-x64.tar.gz -C /opt/dotnet
 - sudo ln -s /opt/dotnet/dotnet /usr/bin/dotnet
@@ -22,6 +22,6 @@ script:
 - dotnet pack src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$(date +"%y%m%d")-$TRAVIS_BUILD_NUMBER"
   --output .
 after_success:
-- 'if [ "$TRAVIS_BRANCH" == "release/2.1" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
+- 'if [ "$TRAVIS_BRANCH" == "release/2.2" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
   curl -H "X-NuGet-ApiKey: $NUGET_APIKEY" -T src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.*.nupkg
   https://www.myget.org/F/redhat-dotnet/api/v2/package ; fi'
