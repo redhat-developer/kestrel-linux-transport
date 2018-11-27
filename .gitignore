@@ -1,3 +1,7 @@
-bin
-obj
+bin/
+obj/
 project.lock.json
+
+.vs/
+.vscode/
+.idea/
