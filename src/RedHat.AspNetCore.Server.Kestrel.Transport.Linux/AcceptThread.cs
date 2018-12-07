@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
@@ -14,19 +15,20 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             Stopped
         }
 
+        private readonly List<int> _handlers = new List<int>();
+        private readonly object _gate = new object();
+        
         private Socket _socket;
         private State _state;
-        private readonly object _gate = new object();
         private TaskCompletionSource<object> _stoppedTcs;
         private Thread _thread;
         private PipeEndPair _pipeEnds;
-        private int[] _handlers;
+        
 
         public AcceptThread(Socket socket)
         {
             _socket = socket;
             _state = State.Initial;
-            _handlers = Array.Empty<int>();
         }
 
         public int CreateReceiveSocket()
@@ -37,11 +39,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     throw new InvalidOperationException($"Invalid operation: {_state}");
                 }
+                
                 var pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
-                var updatedHandlers = new int[_handlers.Length + 1];
-                Array.Copy(_handlers, updatedHandlers, _handlers.Length);
-                updatedHandlers[updatedHandlers.Length - 1] = pair.Socket1;
-                _handlers = updatedHandlers;
+                
+                _handlers.Add(pair.Socket1);
+                
                 return pair.Socket2;
             }
         }
