@@ -60,7 +60,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             for (int i = 0; i < _cpuInfos.Length; i++)
             {
                 var cpuInfo = _cpuInfos[i];
-                
                 if (cpuInfo.SocketId != socket)
                 {
                     continue;
@@ -79,7 +78,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         break;
                     }
                 }
-                
                 if (!duplicate)
                 {
                     yield return core;
