@@ -41,7 +41,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 var socket = _cpuInfos[i].SocketId;
                 bool duplicate = false;
-                
                 for (int j = 0; j < i; j++)
                 {
                     if (socket == _cpuInfos[j].SocketId)
@@ -50,7 +49,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         break;
                     }
                 }
-                
                 if (!duplicate)
                 {
                     yield return socket;
@@ -67,17 +65,14 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     continue;
                 }
-                
                 var core = _cpuInfos[i].CoreId;
                 bool duplicate = false;
-                
                 for (int j = 0; j < i; j++)
                 {
                     if (_cpuInfos[j].SocketId != socket)
                     {
                         continue;
                     }
-                    
                     if (core == _cpuInfos[j].CoreId)
                     {
                         duplicate = true;
