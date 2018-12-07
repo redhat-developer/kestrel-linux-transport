@@ -93,7 +93,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     continue;
                 }
-                
                 yield return _cpuInfos[i].Id;
             }
         }
