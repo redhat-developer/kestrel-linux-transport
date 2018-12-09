@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Threading;
 
@@ -143,7 +144,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                                 if (*key == acceptKey)
                                 {
                                     var handler = handlers[nextHandler];
-                                    nextHandler = (nextHandler + 1) % handlers.Length;
+                                    nextHandler = (nextHandler + 1) % handlers.Count;
                                     socket.TryAcceptAndSendHandleTo(handler);
                                 }
                                 else
