@@ -6,7 +6,6 @@ set(SOURCES
     socket.cpp
     scheduler.cpp
     io.cpp
-    error.cpp
     aio.cpp
 )
 

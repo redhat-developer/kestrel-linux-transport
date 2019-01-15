@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using System.Collections.Generic;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -34,36 +35,21 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
             else
             {
-                lock (s_descriptions)
+                lock (s_errnoDescriptions)
                 {
                     string description;
-                    if (s_descriptions.TryGetValue(_value, out description))
+                    if (s_errnoDescriptions.TryGetValue(_value, out description))
                     {
                         return description;
                     }
                     description = ErrorInterop.StrError(-_value);
-                    s_descriptions.Add(_value, description);
+                    s_errnoDescriptions.Add(_value, description);
                     return description;
                 }
             }
         }
 
-        internal string ErrorName()
-        {
-            if (_value < 0)
-            {
-                string name;
-                if (s_names.TryGetValue(_value, out name))
-                {
-                    return name;
-                }
-                return $"E{-_value}";
-            }
-            else
-            {
-                return string.Empty;
-            }
-        }
+        private static Dictionary<int, string> s_errnoDescriptions = new Dictionary<int, string>();
 
         public Exception AsException()
         {
@@ -71,7 +57,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new InvalidOperationException($"{nameof(PosixResult)} is not an error.");
             }
-            return new IOException(ErrorName(), _value);
+            return new IOException(ErrorDescription(), _value);
         }
 
         public void ThrowOnError()
@@ -115,7 +101,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
             else
             {
-                return ErrorName();
+                return ErrorDescription();
             }
         }
 
