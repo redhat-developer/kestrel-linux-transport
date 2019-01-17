@@ -6,11 +6,11 @@
     <TargetFramework>netcoreapp2.1</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DebugType>portable</DebugType>
-    <LangVersion>7.2</LangVersion>
+    <LangVersion>7.3</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="..\..\bin\Linux.x64.Release\Native\RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native.so" PackagePath="runtimes/linux-x64/native" Pack="true" CopyToOutputDirectory="Always"/>
+    <None Include="..\..\bin\Linux.x64.Release\Native\RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native.so" PackagePath="runtimes/linux-x64/native" Pack="true" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
   <Target Name="PrecompileScript" BeforeTargets="BeforeBuild">

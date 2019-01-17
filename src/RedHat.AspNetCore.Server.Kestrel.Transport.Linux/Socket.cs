@@ -1,15 +1,12 @@
 using System;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Text;
+using Tmds.LibC;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    unsafe struct IOVector
-    {
-        public void* Base;
-        public void* Count;
-    }
-
     struct SocketPair
     {
         public int Socket1;
@@ -32,13 +29,23 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
     static class SocketInterop
     {
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Socket")]
-        public static extern unsafe PosixResult Socket(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking, out int socket);
+        public static unsafe PosixResult Socket(int domain, int type, int protocol, bool blocking, out int s)
+        {
+            type |= SOCK_CLOEXEC;
+            if (!blocking)
+            {
+                type |= SOCK_NONBLOCK;
+            }
 
-        public static PosixResult Socket(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking, out Socket socket)
+            s = socket(domain, type, protocol);
+
+            return PosixResult.FromReturnValue(s);
+        }
+
+        public static PosixResult Socket(int domain, int type, int protocol, bool blocking, out Socket socket)
         {
             int socketFd;
-            PosixResult result = Socket(addressFamily, socketType, protocolType, blocking, out socketFd);
+            PosixResult result = Socket(domain, type, protocol, blocking, out socketFd);
             socket = result.IsSuccess ? new Socket(socketFd) : null;
             return result;
         }
@@ -49,74 +56,193 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public static PosixResult GetAvailableBytes(Socket socket)
             => GetAvailableBytes(socket.DangerousGetHandle().ToInt32());
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Bind")]
-        public static extern unsafe PosixResult Bind(int socket, byte* addr, int addrlen);
+        public static unsafe PosixResult Accept(int socket, bool blocking, out int clientSocket)
+        {
+            int flags = SOCK_CLOEXEC;
+            if (!blocking)
+            {
+                flags |= SOCK_NONBLOCK;
+            }
+            int rv;
+            do
+            {
+                rv = accept4(socket, null, null, flags);
+            } while (rv < 0 && errno == EINTR);
 
-        public static unsafe PosixResult Bind(Socket socket, byte* addr, int addrlen)
-            => Bind(socket.DangerousGetHandle().ToInt32(), addr, addrlen);
+            clientSocket = rv;
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Connect")]
-        public static extern unsafe PosixResult Connect(Socket socket, byte* addr, int addrlen);
+            return PosixResult.FromReturnValue(rv);
+        }
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Listen")]
-        public static extern PosixResult Listen(int socket, int backlog);
-
-        public static PosixResult Listen(Socket socket, int backlog)
-            => Listen(socket.DangerousGetHandle().ToInt32(), backlog);
-
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Accept")]
-        public static unsafe extern PosixResult Accept(int socket, byte* socketAddress, int socketAddressLen, bool blocking, out int clientSocket);
-
-        public static unsafe PosixResult Accept(Socket socket, byte* socketAddress, int socketAddressLen, bool blocking, out Socket clientSocket)
+        public static unsafe PosixResult Accept(Socket socket, bool blocking, out Socket clientSocket)
         {
             int clientSocketFd;
-            PosixResult result = Accept(socket.DangerousGetHandle().ToInt32(), socketAddress, socketAddressLen, blocking, out clientSocketFd);
+            PosixResult result = Accept(socket.DangerousGetHandle().ToInt32(), blocking, out clientSocketFd);
             clientSocket = result.IsSuccess ? new Socket(clientSocketFd) : null;
             return result;
         }
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Shutdown")]
-        public static extern PosixResult Shutdown(Socket socket, SocketShutdown shutdown);
+        public static PosixResult Shutdown(Socket socket, int how)
+            => Shutdown(socket.DangerousGetHandle().ToInt32(), how);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Send")]
-        public static extern unsafe PosixResult Send(int socket, IOVector* ioVectors, int ioVectorLen, int flags = 0);
-        public static unsafe PosixResult Send(SafeHandle socket, IOVector* ioVectors, int ioVectorLen, int flags = 0)
+        public static PosixResult Shutdown(int socket, int how)
+        {
+            int rv = shutdown(socket, how);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult Send(int socket, iovec* ioVectors, int ioVectorLen, int flags = 0)
+        {
+            msghdr hdr = default(msghdr);
+            hdr.msg_iov = ioVectors;
+            hdr.msg_iovlen = ioVectorLen;
+
+            flags |= MSG_NOSIGNAL;
+
+            int rv;
+            do
+            {
+                rv = (int)sendmsg(socket, &hdr, flags);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult Send(SafeHandle socket, iovec* ioVectors, int ioVectorLen, int flags = 0)
         => Send(socket.DangerousGetHandle().ToInt32(), ioVectors, ioVectorLen, flags);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Receive")]
-        public static unsafe extern PosixResult Receive(int socket, IOVector* ioVectors, int ioVectorLen);
-        public static unsafe PosixResult Receive(SafeHandle socket, IOVector* ioVectors, int ioVectorLen)
+        public static unsafe PosixResult Receive(int socket, iovec* ioVectors, int ioVectorLen)
+        {
+            msghdr hdr = default(msghdr);
+            hdr.msg_iov = ioVectors;
+            hdr.msg_iovlen = ioVectorLen;
+
+            int flags = MSG_NOSIGNAL;
+
+            int rv;
+            do
+            {
+                rv = (int)recvmsg(socket, &hdr, flags);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult Receive(SafeHandle socket, iovec* ioVectors, int ioVectorLen)
         => Receive(socket.DangerousGetHandle().ToInt32(), ioVectors, ioVectorLen);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_SetSockOpt")]
-        public static extern unsafe PosixResult SetSockOpt(int socket, SocketOptionLevel optionLevel, SocketOptionName optionName, byte* optionValue, int optionLen);
+        public static unsafe PosixResult SetSockOpt(int socket, int level, int optname, void* optval, socklen_t optlen)
+        {
+            int rv = setsockopt(socket, level, optname, optval, optlen);
 
-        public static unsafe PosixResult SetSockOpt(Socket socket, SocketOptionLevel optionLevel, SocketOptionName optionName, byte* optionValue, int optionLen)
-            => SetSockOpt(socket.DangerousGetHandle().ToInt32(), optionLevel, optionName, optionValue, optionLen);
+            return PosixResult.FromReturnValue(rv);
+        }
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_GetSockOpt")]
-        public static extern unsafe PosixResult GetSockOpt(SafeHandle socket, SocketOptionLevel optionLevel, SocketOptionName optionName, byte* optionValue, int* optionLen);
+        public static unsafe PosixResult SetSockOpt(Socket socket, int level, int optname, void* optval, socklen_t optlen)
+            => SetSockOpt(socket.DangerousGetHandle().ToInt32(), level, optname, optval, optlen);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_GetPeerName")]
-        public static extern unsafe PosixResult GetPeerName(int socket, byte* addr, int addrlen);
+        public static unsafe PosixResult GetSockOpt(SafeHandle socket, int level, int optname, void* optval, socklen_t* optlen)
+        {
+            int rv = getsockopt(socket.DangerousGetHandle().ToInt32(), level, optname, optval, optlen);
 
-        public static unsafe PosixResult GetPeerName(Socket socket, byte* addr, int addrlen)
-            => GetPeerName(socket.DangerousGetHandle().ToInt32(), addr, addrlen);
+            return PosixResult.FromReturnValue(rv);
+        }
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_GetSockName")]
-        public static extern unsafe PosixResult GetSockName(int socket, byte* addr, int addrlen);
+        public static unsafe PosixResult GetPeerName(int socket, sockaddr_storage* addr)
+        {
+            socklen_t sockLen = SizeOf.sockaddr_storage;
+            int rv = getpeername(socket, (sockaddr*)addr, &sockLen);
 
-        public static unsafe PosixResult GetSockName(Socket socket, byte* addr, int addrlen)
-            => GetSockName(socket.DangerousGetHandle().ToInt32(), addr, addrlen);
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult GetPeerName(Socket socket, sockaddr_storage* addr)
+            => GetPeerName(socket.DangerousGetHandle().ToInt32(), addr);
+
+        public static unsafe PosixResult GetSockName(int socket, sockaddr_storage* addr)
+        {
+            socklen_t sockLen = SizeOf.sockaddr_storage;
+            int rv = getsockname(socket, (sockaddr*)addr, &sockLen);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult GetSockName(Socket socket, sockaddr_storage* addr)
+            => GetSockName(socket.DangerousGetHandle().ToInt32(), addr);
 
         [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Duplicate")]
         public static extern PosixResult Duplicate(Socket socket, out Socket dup);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_SocketPair")]
-        public static extern PosixResult SocketPair(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking, out int socket1, out int socket2);
+        public static unsafe PosixResult SocketPair(int domain, int type, int protocol, bool blocking, out int socket1, out int socket2)
+        {
+            int* sv = stackalloc int[2];
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_ReceiveHandle")]
-        public extern static PosixResult ReceiveSocket(int fromSocket, out int socket, bool blocking);
+            type |= SOCK_CLOEXEC;
+
+            if (!blocking)
+            {
+                type |= SOCK_NONBLOCK;
+            }
+
+            int rv = socketpair(domain, type, protocol, sv);
+
+            if (rv == 0)
+            {
+                socket1 = sv[0];
+                socket2 = sv[1];
+            }
+            else
+            {
+                socket1 = -1;
+                socket2 = -1;
+            }
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult ReceiveSocket(int fromSocket, out int socket, bool blocking)
+        {
+            socket = -1;
+            byte dummyBuffer = 0;
+            iovec iov = default(iovec);
+            iov.iov_base = &dummyBuffer;
+            iov.iov_len = 1;
+
+            int controlLength = CMSG_SPACE(sizeof(int));
+            byte* control = stackalloc byte[controlLength];
+
+            msghdr header = default(msghdr);
+            header.msg_iov = &iov;
+            header.msg_iovlen = 1;
+            header.msg_control = control;
+            header.msg_controllen = controlLength;
+
+            int flags = MSG_NOSIGNAL | MSG_CMSG_CLOEXEC;
+
+            int rv;
+            do
+            {
+                rv = (int)recvmsg(fromSocket, &header, flags);
+            } while (rv < 0 && errno == EINTR);
+
+            if (rv != -1)
+            {
+                for (cmsghdr* cmsg = CMSG_FIRSTHDR(&header); cmsg != null; cmsg = CMSG_NXTHDR(&header,cmsg))
+                {
+                    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
+                    {
+                        int* fdptr = (int*)CMSG_DATA(cmsg);
+                        socket = *fdptr;
+
+                        // TODO make non blocking!
+                        break;
+                    }
+                }
+            }
+
+            return PosixResult.FromReturnValue(rv);
+        }
 
         public static PosixResult ReceiveSocket(Socket fromSocket, out Socket socket, bool blocking)
         {
@@ -126,21 +252,191 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             return result;
         }
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_AcceptAndSendHandleTo")]
-        public extern static PosixResult AcceptAndSendHandleTo(Socket fromSocket, int toSocket);
+        public unsafe static PosixResult AcceptAndSendHandleTo(Socket fromSocket, int toSocket)
+        {
+            int acceptFd = fromSocket.DangerousGetHandle().ToInt32();
+            int rv;
+            do
+            {
+                rv = accept4(acceptFd, null, null, SOCK_CLOEXEC);
+            } while (rv < 0 && errno == EINTR);
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_CompleteZeroCopy")]
-        public extern static PosixResult CompleteZeroCopy(int socket);
+            if (rv != -1)
+            {
+                int acceptedFd = rv;
+                
+                byte dummyBuffer = 0;
+                iovec iov = default(iovec);
+                iov.iov_base = &dummyBuffer;
+                iov.iov_len = 1;
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_Disconnect")]
-        public extern static PosixResult Disconnect(int socket);
+                int controlLength = CMSG_SPACE(sizeof(int));
+                byte* control = stackalloc byte[controlLength];
+
+                msghdr header = default(msghdr);
+                header.msg_iov = &iov;
+                header.msg_iovlen = 1;
+                header.msg_control = control;
+                header.msg_controllen = controlLength;
+
+                cmsghdr* cmsg = CMSG_FIRSTHDR(&header);
+                cmsg->cmsg_level = SOL_SOCKET;
+                cmsg->cmsg_type = SCM_RIGHTS;
+                cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+                int *fdptr = (int*)CMSG_DATA(cmsg);
+                *fdptr = acceptedFd;
+
+                do
+                {
+                    rv = (int)sendmsg(toSocket, &header, MSG_NOSIGNAL);
+                } while (rv < 0 && errno == EINTR);
+
+                IOInterop.Close(acceptedFd); // TODO!!
+            }
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult CompleteZeroCopy(int socket)
+        {
+            msghdr msg = default(msghdr);
+            int controlLength = 100;
+            byte* control = stackalloc byte[controlLength];
+
+            do
+            {
+                msg.msg_control = control;
+                msg.msg_controllen = controlLength;
+
+                int rv;
+                do
+                {
+                    rv = (int)recvmsg(socket, &msg, MSG_NOSIGNAL| MSG_ERRQUEUE);
+                } while (rv < 0 && errno == EINTR);
+
+                if (rv == -1)
+                {
+                    return PosixResult.FromReturnValue(rv);
+                }
+                cmsghdr* cm = CMSG_FIRSTHDR(&msg);
+                if (cm == null)
+                {
+                    continue;
+                }
+
+                if (!((cm->cmsg_level == SOL_IP && cm->cmsg_type == IP_RECVERR) ||
+                    (cm->cmsg_level == SOL_IPV6 && cm->cmsg_type == IPV6_RECVERR)))
+                {
+                    continue;
+                }
+
+                sock_extended_err *serr = (sock_extended_err*)CMSG_DATA(cm);
+                if ((serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) ||
+                    (serr->ee_errno != 0))
+                {
+                    continue;
+                }
+
+                return new PosixResult(((serr->ee_code & SO_EE_CODE_ZEROCOPY_COPIED) != 0) ?
+                                        ZeroCopyCopied : ZeroCopySuccess);
+            } while (true);
+        }
+
+        public static unsafe PosixResult Disconnect(int socket)
+        {
+            sockaddr addr = default(sockaddr);
+            addr.sa_family = AF_UNSPEC;
+
+            int rv;
+            do
+            {
+                rv = connect(socket, &addr, SizeOf.sockaddr);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
+        }
 
         public const int ZeroCopyCopied = 0;
         public const int ZeroCopySuccess = 1;
+
+        public static unsafe PosixResult TryGetLocalIPAddress(Socket socket, out IPEndPointStruct ep, IPAddress reuseAddress = null)
+            => TryGetLocalIPAddress(socket.DangerousGetHandle().ToInt32(), out ep, reuseAddress);
+
+        public static unsafe PosixResult TryGetLocalIPAddress(int socket, out IPEndPointStruct ep, IPAddress reuseAddress = null)
+        {
+            sockaddr_storage socketAddress;
+            var rv = SocketInterop.GetSockName(socket, &socketAddress);
+            if (rv.IsSuccess)
+            {
+                if (!ToIPEndPointStruct(&socketAddress, out ep, reuseAddress))
+                {
+                    return new PosixResult(PosixResult.EINVAL);
+                }
+            }
+            else
+            {
+                ep = default(IPEndPointStruct);
+            }
+            return rv;
+        }
+
+        public static unsafe PosixResult TryGetPeerIPAddress(Socket socket, out IPEndPointStruct ep, IPAddress reuseAddress = null)
+            => TryGetPeerIPAddress(socket.DangerousGetHandle().ToInt32(), out ep, reuseAddress);
+
+        public static unsafe PosixResult TryGetPeerIPAddress(int socket, out IPEndPointStruct ep, IPAddress reuseAddress = null)
+        {
+            sockaddr_storage socketAddress;
+            var rv = SocketInterop.GetPeerName(socket, &socketAddress);
+            if (rv.IsSuccess)
+            {
+                if (!ToIPEndPointStruct(&socketAddress, out ep, reuseAddress))
+                {
+                    return new PosixResult(PosixResult.EINVAL);
+                }
+            }
+            else
+            {
+                ep = default(IPEndPointStruct);
+            }
+            return rv;
+        }
+
+        private static unsafe bool ToIPEndPointStruct(sockaddr_storage* addr, out IPEndPointStruct ep, IPAddress reuseAddress = null)
+        {
+            // TODO: move to Tmds.LibC?
+            if (addr->ss_family == AF_INET)
+            {
+                sockaddr_in* addrIn = (sockaddr_in*)addr;
+                long value = ((addrIn->sin_addr.s_addr[3] << 24 | addrIn->sin_addr.s_addr[2] << 16 | addrIn->sin_addr.s_addr[1] << 8 | addrIn->sin_addr.s_addr[0]) & 0x0FFFFFFFF);
+                bool matchesReuseAddress = reuseAddress != null && reuseAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && reuseAddress.Address == value;
+                int port = ntohs(addrIn->sin_port);
+                ep = new IPEndPointStruct(matchesReuseAddress ? reuseAddress : new IPAddress(value), port);
+                return true;
+            }
+            else if (addr->ss_family == AF_INET6)
+            {
+                sockaddr_in6* addrIn = (sockaddr_in6*)addr;
+                // We can't check if we can use reuseAddress without allocating.
+                const int length = 16;
+                var bytes = new byte[length];
+                for (int i = 0; i < length; i++)
+                {
+                    bytes[i] = addrIn->sin6_addr.s6_addr[i];
+                }
+                int port = ntohs(addrIn->sin6_port);
+                ep = new IPEndPointStruct(new IPAddress(bytes, addrIn->sin6_scope_id), port);
+                return true;
+            }
+            else
+            {
+                ep = default(IPEndPointStruct);
+                return false;
+            }
+        }
     }
 
     // Warning: Some operations use DangerousGetHandle for increased performance
-    class Socket : CloseSafeHandle
+    unsafe class Socket : CloseSafeHandle
     {
         private Socket()
         {}
@@ -149,10 +445,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             base(handle)
         {}
 
-        public static Socket Create(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking)
+        public static Socket Create(int domain, int type, int protocol, bool blocking)
         {
             Socket socket;
-            var result = SocketInterop.Socket(addressFamily, socketType, protocolType, blocking, out socket);
+            var result = SocketInterop.Socket(domain, type, protocol, blocking, out socket);
             result.ThrowOnError();
             return socket;
         }
@@ -177,8 +473,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryBind(string unixPath)
         {
-            UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
-            return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(UnixSocketAddress));
+            sockaddr_un addr;
+            GetSockaddrUn(unixPath, out addr);
+            int rv = bind(DangerousGetHandle().ToInt32(), (sockaddr*)&addr, SizeOf.sockaddr_un);
+
+            return PosixResult.FromReturnValue(rv);
         }
 
         public void Bind(IPEndPointStruct endpoint)
@@ -189,8 +488,12 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
         {
-            IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
-            return SocketInterop.Bind(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
+            sockaddr_storage addr;
+            GetSockaddrInet(endpoint, &addr, out int length);
+
+            int rv = bind(DangerousGetHandle().ToInt32(), (sockaddr*)&addr, length);
+
+            return PosixResult.FromReturnValue(rv);
         }
 
         public void Connect(IPEndPointStruct endpoint)
@@ -201,8 +504,15 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryConnect(IPEndPointStruct endpoint)
         {
-            IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
-            return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
+            sockaddr_storage addr;
+            GetSockaddrInet(endpoint, &addr, out int length);
+            int rv;
+            do
+            {
+                rv = connect(DangerousGetHandle().ToInt32(), (sockaddr*)&addr, length);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
         }
 
         public void Connect(string unixPath)
@@ -213,8 +523,67 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryConnect(string unixPath)
         {
-            UnixSocketAddress socketAddress = new UnixSocketAddress(unixPath);
-            return SocketInterop.Connect(this, (byte*)&socketAddress, sizeof(UnixSocketAddress));
+            sockaddr_un addr;
+            GetSockaddrUn(unixPath, out addr);
+            int rv;
+            do
+            {
+                rv = connect(DangerousGetHandle().ToInt32(), (sockaddr*)&addr, SizeOf.sockaddr_un);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        private static void GetSockaddrUn(string unixPath, out sockaddr_un addr)
+        {
+            // TODO: move to Tmds.LibC?
+            addr = default(sockaddr_un);
+            addr.sun_family = AF_UNIX;
+            var bytes = Encoding.UTF8.GetBytes(unixPath);
+            int length = Math.Min(bytes.Length, sockaddr_un.sun_path_length - 1);
+            fixed (byte* pathBytes = bytes)
+            {
+                for (int i = 0; i < length; i++)
+                {
+                    addr.sun_path[i] = bytes[i];
+                }
+            }
+            addr.sun_path[length] = 0;
+        }
+
+        internal static unsafe void GetSockaddrInet(IPEndPointStruct inetAddress, sockaddr_storage* addr, out int length)
+        {
+            // TODO: move to Tmds.LibC?
+            if (inetAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                sockaddr_in* addrIn = (sockaddr_in*)addr;
+                addrIn->sin_family = AF_INET;
+                addrIn->sin_port = htons((ushort)inetAddress.Port);
+                byte[] addressBytes = inetAddress.Address.GetAddressBytes(); // TODO: remove allocation
+                for (int i = 0; i < 4; i++)
+                {
+                    addrIn->sin_addr.s_addr[i] = addressBytes[i];
+                }
+                length = SizeOf.sockaddr_in;
+            }
+            else if (inetAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            {
+                sockaddr_in6* addrIn = (sockaddr_in6*)addr;
+                addrIn->sin6_family = AF_INET6;
+                addrIn->sin6_port = htons((ushort)inetAddress.Port);
+                addrIn->sin6_flowinfo = 0;
+                addrIn->sin6_scope_id = 0;
+                byte[] addressBytes = inetAddress.Address.GetAddressBytes(); // TODO: remove allocation
+                for (int i = 0; i < 16; i++)
+                {
+                    addrIn->sin6_addr.s6_addr[i] = addressBytes[i];
+                }
+                length = SizeOf.sockaddr_in6;
+            }
+            else
+            {
+                length = 0;
+            }
         }
 
         public void Listen(int backlog)
@@ -225,7 +594,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public PosixResult TryListen(int backlog)
         {
-            return SocketInterop.Listen(this, backlog);
+            int rv = listen(DangerousGetHandle().ToInt32(), backlog);
+
+            return PosixResult.FromReturnValue(rv);
         }
 
         public unsafe Socket Accept(bool blocking)
@@ -238,7 +609,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryAccept(out Socket clientSocket, bool blocking)
         {
-            return SocketInterop.Accept(this, null, 0, blocking, out clientSocket);
+            return SocketInterop.Accept(this, blocking, out clientSocket);
         }
 
         public int Receive(ArraySegment<byte> buffer)
@@ -253,30 +624,30 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             ValidateSegment(buffer);
             fixed (byte* buf = buffer.Array)
             {
-                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = (void*)buffer.Count };
+                iovec ioVector = new iovec() { iov_base = buf + buffer.Offset, iov_len = buffer.Count };
                 return SocketInterop.Receive(this, &ioVector, 1);
             }
         }
 
-        public unsafe int Receive(IOVector* ioVectors, int ioVectorLen)
+        public unsafe int Receive(iovec* ioVectors, int ioVectorLen)
         {
             var result = TryReceive(ioVectors, ioVectorLen);
             result.ThrowOnError();
             return result.Value;
         }
 
-        public unsafe PosixResult TryReceive(IOVector* ioVectors, int ioVectorLen)
+        public unsafe PosixResult TryReceive(iovec* ioVectors, int ioVectorLen)
         {
             return SocketInterop.Receive(this, ioVectors, ioVectorLen);
         }
 
-        public void Shutdown(SocketShutdown shutdown)
+        public void Shutdown(int shutdown)
         {
             TryShutdown(shutdown)
                 .ThrowOnError();
         }
 
-        public PosixResult TryShutdown(SocketShutdown shutdown)
+        public PosixResult TryShutdown(int shutdown)
         {
             return SocketInterop.Shutdown(this, shutdown);
         }
@@ -293,48 +664,48 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             ValidateSegment(buffer);
             fixed (byte* buf = buffer.Array)
             {
-                IOVector ioVector = new IOVector() { Base = buf + buffer.Offset, Count = (void*)buffer.Count };
+                iovec ioVector = new iovec() { iov_base = buf + buffer.Offset, iov_len = buffer.Count };
                 return SocketInterop.Send(this, &ioVector, 1);
             }
         }
 
-        public unsafe int Send(IOVector* ioVectors, int ioVectorLen)
+        public unsafe int Send(iovec* ioVectors, int ioVectorLen)
         {
             var result = TrySend(ioVectors, ioVectorLen);
             result.ThrowOnError();
             return result.Value;
         }
 
-        public unsafe PosixResult TrySend(IOVector* ioVectors, int ioVectorLen)
+        public unsafe PosixResult TrySend(iovec* ioVectors, int ioVectorLen)
         {
             return SocketInterop.Send(this, ioVectors, ioVectorLen);
         }
 
-        public void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
+        public void SetSocketOption(int level, int optname, int value)
         {
-            TrySetSocketOption(optionLevel, optionName, value)
+            TrySetSocketOption(level, optname, value)
                 .ThrowOnError();
         }
 
-        public unsafe PosixResult TrySetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
+        public unsafe PosixResult TrySetSocketOption(int level, int optname, int value)
         {
-            return SocketInterop.SetSockOpt(this, optionLevel, optionName, (byte*)&value, 4);
+            return SocketInterop.SetSockOpt(this, level, optname, (byte*)&value, 4);
         }
 
         // TODO: rename to GetSocketOptionInt
-        public int GetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName)
+        public int GetSocketOption(int level, int optname)
         {
             int value = 0;
-            var result = TryGetSocketOption(optionLevel, optionName, ref value);
+            var result = TryGetSocketOption(level, optname, ref value);
             result.ThrowOnError();
             return value;
         }
 
-        public unsafe PosixResult TryGetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, ref int value)
+        public unsafe PosixResult TryGetSocketOption(int level, int optname, ref int value)
         {
             int v = 0;
-            int length = 4;
-            var rv = SocketInterop.GetSockOpt(this, optionLevel, optionName, (byte*)&v, &length);
+            socklen_t length = 4;
+            var rv = SocketInterop.GetSockOpt(this, level, optname, (byte*)&v, &length);
             if (rv.IsSuccess)
             {
                 value = v;
@@ -351,19 +722,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         }
 
         public unsafe PosixResult TryGetLocalIPAddress(out IPEndPointStruct ep, IPAddress reuseAddress = null)
-        {
-            IPSocketAddress socketAddress;
-            var rv = SocketInterop.GetSockName(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
-            if (rv.IsSuccess)
-            {
-                ep = socketAddress.ToIPEndPoint(reuseAddress);
-            }
-            else
-            {
-                ep = default(IPEndPointStruct);
-            }
-            return rv;
-        }
+            => SocketInterop.TryGetLocalIPAddress(this, out ep, reuseAddress);
 
         public IPEndPointStruct GetPeerIPAddress()
         {
@@ -374,19 +733,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         }
 
         public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
-        {
-            IPSocketAddress socketAddress;
-            var rv = SocketInterop.GetPeerName(this, (byte*)&socketAddress, sizeof(IPSocketAddress));
-            if (rv.IsSuccess)
-            {
-                ep = socketAddress.ToIPEndPoint();
-            }
-            else
-            {
-                ep = default(IPEndPointStruct);
-            }
-            return rv;
-        }
+            => SocketInterop.TryGetPeerIPAddress(this, out ep);
 
         public Socket Duplicate()
         {
@@ -416,11 +763,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public static SocketPair CreatePair(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, bool blocking)
+        public static SocketPair CreatePair(int domain, int type, int protocol, bool blocking)
         {
             int socket1;
             int socket2;
-            var result = SocketInterop.SocketPair(addressFamily, socketType, protocolType, blocking, out socket1, out socket2);
+            var result = SocketInterop.SocketPair(domain, type, protocol, blocking, out socket1, out socket2);
             return new SocketPair { Socket1 = socket1, Socket2 = socket2 };
         }
 

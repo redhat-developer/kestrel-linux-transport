@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
+using static Tmds.LibC.Definitions;
 
 namespace Tests
 {
@@ -206,14 +207,14 @@ namespace Tests
         {
             if (_unixSocketPath != null)
             {
-                var client = Socket.Create(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: true);
+                var client = Socket.Create(AF_UNIX, SOCK_STREAM, 0, blocking: true);
                 client.Connect(_unixSocketPath);
                 return client;
             }
             else if (_serverAddress != null)
             {
-                var client = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
-                client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                var client = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
+                client.SetSocketOption(SOL_TCP, TCP_NODELAY, 1);
                 client.Connect(_serverAddress);
                 return client;
             }

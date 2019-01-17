@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
+using static Tmds.LibC.Definitions;
 
 namespace Tests
 {
@@ -295,7 +296,7 @@ namespace Tests
                     {
                         offset += client.Send(new ArraySegment<byte>(buffer, offset, buffer.Length - offset));
                     } while (offset != buffer.Length);
-                    client.Shutdown(SocketShutdown.Send);
+                    client.Shutdown(SHUT_WR);
 
                     // wait for the server to stop
                     var receiveBuffer = new byte[1];

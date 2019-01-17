@@ -27,6 +27,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
+        public static PosixResult FromReturnValue(int rv)
+        {
+            return rv < 0 ? new PosixResult(-Tmds.LibC.Definitions.errno) : new PosixResult(rv);
+        }
+
         internal string ErrorDescription()
         {
             if (_value >= 0)
