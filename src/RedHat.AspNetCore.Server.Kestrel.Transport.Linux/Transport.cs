@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -85,7 +86,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         Socket socket;
                         if (_endPoint.Type == ListenType.SocketPath)
                         {
-                            socket = Socket.Create(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+                            socket = Socket.Create(AF_UNIX, SOCK_STREAM, 0, blocking: false);
                             File.Delete(_endPoint.SocketPath);
                             socket.Bind(_endPoint.SocketPath);
                             socket.Listen(ListenBacklog);

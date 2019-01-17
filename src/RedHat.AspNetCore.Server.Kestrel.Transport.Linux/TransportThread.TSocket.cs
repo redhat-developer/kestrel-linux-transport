@@ -6,8 +6,10 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Tmds.LibC;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -256,7 +258,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 else
                 {
                     int ioVectorLength = CalcIOVectorLengthForSend(ref buffer, MaxIOVectorSendLength);
-                    var ioVectors = stackalloc IOVector[ioVectorLength];
+                    var ioVectors = stackalloc iovec[ioVectorLength];
                     FillSendIOVector(ref buffer, ioVectors, ioVectorLength, memoryHandles);
                     bool zerocopy = buffer.Length >= ZeroCopyThreshold;
 
@@ -454,7 +456,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe int FillReceiveIOVector(ReceiveMemoryAllocation memoryAllocation, IOVector* ioVectors, Span<MemoryHandle> handles)
+            public unsafe int FillReceiveIOVector(ReceiveMemoryAllocation memoryAllocation, iovec* ioVectors, Span<MemoryHandle> handles)
             {
                 PipeWriter writer = Input;
                 int advanced = 0;
@@ -464,8 +466,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 for (int i = 0; i < memoryAllocation.IovLength; i++)
                 {
                     var bufferHandle = memory.Pin();
-                    ioVectors[i].Base = bufferHandle.Pointer;
-                    ioVectors[i].Count = (void*)length;
+                    ioVectors[i].iov_base = bufferHandle.Pointer;
+                    ioVectors[i].iov_len = length;
                     handles[i] = bufferHandle;
 
                     // Every Memory (except the last one) must be filled completely.
@@ -484,7 +486,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe PosixResult Receive(Span<MemoryHandle> handles)
             {
                 ReceiveMemoryAllocation memoryAllocation = DetermineMemoryAllocationForReceive(MaxIOVectorReceiveLength);
-                var ioVectors = stackalloc IOVector[memoryAllocation.IovLength];
+                var ioVectors = stackalloc iovec[memoryAllocation.IovLength];
                 int advanced = FillReceiveIOVector(memoryAllocation, ioVectors, handles);
 
                 try
@@ -530,7 +532,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe (bool done, PosixResult receiveResult) InterpretReceiveResult(PosixResult result, ref int received, int advanced, IOVector* ioVectors, int ioVectorLength)
+            public unsafe (bool done, PosixResult receiveResult) InterpretReceiveResult(PosixResult result, ref int received, int advanced, iovec* ioVectors, int ioVectorLength)
             {
                 PipeWriter writer = Input;
                 if (result.IsSuccess)
@@ -540,7 +542,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         // We made it!
                         int finalAdvance = received - advanced;
-                        int spaceRemaining = (int)(ioVectors[ioVectorLength - 1].Count) - finalAdvance;
+                        int spaceRemaining = (int)(ioVectors[ioVectorLength - 1].iov_len) - finalAdvance;
                         if (spaceRemaining == 0)
                         {
                             // We used up all room, assume there is a remainder to be read.
@@ -565,10 +567,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     var skip = result.Value;
                     for (int i = 0; (i < ioVectorLength) && (skip > 0); i++)
                     {
-                        var length = (int)ioVectors[i].Count;
+                        var length = (int)ioVectors[i].iov_len;
                         var skipped = Math.Min(skip, length);
-                        ioVectors[i].Count = (void*)(length - skipped);
-                        ioVectors[i].Base = (byte*)ioVectors[i].Base + skipped;
+                        ioVectors[i].iov_len = length - skipped;
+                        ioVectors[i].iov_base = (byte*)ioVectors[i].iov_base + skipped;
                         skip -= skipped;
                     }
                     return (false, new PosixResult(1));
@@ -715,7 +717,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public unsafe void FillSendIOVector(ref ReadOnlySequence<byte> buffer, IOVector* ioVectors, int ioVectorLength, Span<MemoryHandle> memoryHandles)
+            public unsafe void FillSendIOVector(ref ReadOnlySequence<byte> buffer, iovec* ioVectors, int ioVectorLength, Span<MemoryHandle> memoryHandles)
             {
                 int i = 0;
                 foreach (var memory in buffer)
@@ -725,8 +727,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         continue;
                     }
                     var bufferHandle = memory.Pin();
-                    ioVectors[i].Base = bufferHandle.Pointer;
-                    ioVectors[i].Count = (void*)memory.Length;
+                    ioVectors[i].iov_base = bufferHandle.Pointer;
+                    ioVectors[i].iov_len = memory.Length;
                     memoryHandles[i] = bufferHandle;
                     i++;
                     if (i == ioVectorLength)
@@ -738,7 +740,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, IOVector* ioVectors, int ioVectorLength)
+            private unsafe (PosixResult, bool zerocopyRegistered) TrySend(bool zerocopy, iovec* ioVectors, int ioVectorLength)
             {
                 bool zeroCopyRegistered = false;
 
@@ -792,7 +794,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 => SocketInterop.ReceiveSocket(Fd, out socket, blocking);
 
             public unsafe PosixResult TryAccept(out int socket, bool blocking)
-                => SocketInterop.Accept(Fd, null, 0, blocking, out socket);
+                => SocketInterop.Accept(Fd, blocking, out socket);
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public ReceiveMemoryAllocation DetermineMemoryAllocationForReceive(int maxIovLength)
@@ -845,24 +847,28 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 return result.Value;
             }
 
-            public void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
+            public void SetSocketOption(int level, int optname, int value)
             {
-                TrySetSocketOption(optionLevel, optionName, value)
+                TrySetSocketOption(level, optname, value)
                     .ThrowOnError();
             }
 
-            public unsafe PosixResult TrySetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, int value)
+            public unsafe PosixResult TrySetSocketOption(int level, int optname, int value)
             {
-                return SocketInterop.SetSockOpt(Fd, optionLevel, optionName, (byte*)&value, 4);
+                return SocketInterop.SetSockOpt(Fd, level, optname, (byte*)&value, 4);
             }
 
             public unsafe void Bind(IPEndPointStruct endpoint)
             {
-                IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
-                SocketInterop.Bind(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress)).ThrowOnError();
+                sockaddr_storage addr;
+                Socket.GetSockaddrInet(endpoint, &addr, out int length);
+
+                int rv = bind(Fd, (sockaddr*)&addr, length);
+
+                PosixResult.FromReturnValue(rv).ThrowOnError();
             }
 
-            public void Listen(int backlog) => SocketInterop.Listen(Fd, backlog).ThrowOnError();
+            public void Listen(int backlog) => PosixResult.FromReturnValue(listen(Fd, backlog)).ThrowOnError();
 
             public void Close() => IOInterop.Close(Fd);
 
@@ -875,34 +881,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             public unsafe PosixResult TryGetLocalIPAddress(out IPEndPointStruct ep, IPAddress reuseAddress = null)
-            {
-                IPSocketAddress socketAddress;
-                var rv = SocketInterop.GetSockName(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress));
-                if (rv.IsSuccess)
-                {
-                    ep = socketAddress.ToIPEndPoint(reuseAddress);
-                }
-                else
-                {
-                    ep = default(IPEndPointStruct);
-                }
-                return rv;
-            }
+                => SocketInterop.TryGetLocalIPAddress(Fd, out ep, reuseAddress);
 
             public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
-            {
-                IPSocketAddress socketAddress;
-                var rv = SocketInterop.GetPeerName(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress));
-                if (rv.IsSuccess)
-                {
-                    ep = socketAddress.ToIPEndPoint();
-                }
-                else
-                {
-                    ep = default(IPEndPointStruct);
-                }
-                return rv;
-            }
+                => SocketInterop.TryGetPeerIPAddress(Fd, out ep);
         }
     }
 }

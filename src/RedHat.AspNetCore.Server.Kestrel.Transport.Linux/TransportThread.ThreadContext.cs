@@ -7,8 +7,10 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Tmds.LibC;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -58,7 +60,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private unsafe AioEvent* AioEvents => (AioEvent*)Align(_aioEventsMemory);
             private unsafe AioCb* AioCbs => (AioCb*)Align(_aioCbsMemory);
             private unsafe AioCb** AioCbsTable => (AioCb**)Align(_aioCbsTableMemory);
-            private unsafe IOVector* IoVectorTable => (IOVector*)Align(_ioVectorTableMemory);
+            private unsafe iovec* IoVectorTable => (iovec*)Align(_ioVectorTableMemory);
 
 
             public unsafe ThreadContext(TransportThread transportThread)
@@ -77,7 +79,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _aioEventsMemory = AllocMemory(sizeof(AioEvent) * EventBufferLength);
                     _aioCbsMemory = AllocMemory(sizeof(AioCb) * EventBufferLength);
                     _aioCbsTableMemory = AllocMemory(sizeof(AioCb*) * EventBufferLength);
-                    _ioVectorTableMemory = AllocMemory(sizeof(IOVector) * IoVectorsPerAioSocket * EventBufferLength);
+                    _ioVectorTableMemory = AllocMemory(SizeOf.iovec * IoVectorsPerAioSocket * EventBufferLength);
                     for (int i = 0; i < EventBufferLength; i++)
                     {
                         AioCbsTable[i] = &AioCbs[i];
@@ -116,7 +118,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 try
                 {
                     bool ipv4 = endPoint.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
-                    SocketInterop.Socket(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: false,
+                    SocketInterop.Socket(ipv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, blocking: false,
                         out acceptSocketFd).ThrowOnError();
 
                     TSocket acceptSocket = new TSocket(this, acceptSocketFd, flags);
@@ -124,31 +126,31 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     if (!ipv4)
                     {
                         // Kestrel does mapped ipv4 by default.
-                        acceptSocket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, 0);
+                        acceptSocket.SetSocketOption(SOL_IPV6, IPV6_V6ONLY, 0);
                     }
                     if (_transportOptions.ReceiveOnIncomingCpu)
                     {
                         if (_transportThread.CpuId != -1)
                         {
-                            if (!acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.IncomingCpu, _transportThread.CpuId))
+                            if (!acceptSocket.TrySetSocketOption(SOL_SOCKET, SO_INCOMING_CPU, _transportThread.CpuId))
                             {
-                                _logger.LogWarning($"Cannot enable nameof{SocketOptionName.IncomingCpu} for {endPoint}");
+                                _logger.LogWarning($"Cannot enable SO_INCOMING_CPU for {endPoint}");
                             }
                         }
                     }
                     // Linux: allow bind during linger time
-                    acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+                    acceptSocket.SetSocketOption(SOL_SOCKET, SO_REUSEADDR, 1);
                     // Linux: allow concurrent binds and let the kernel do load-balancing
-                    acceptSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReusePort, 1);
+                    acceptSocket.SetSocketOption(SOL_SOCKET, SO_REUSEPORT, 1);
                     if ((flags & SocketFlags.DeferAccept) != 0)
                     {
                         // Linux: wait up to 1 sec for data to arrive before accepting socket
-                        acceptSocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.DeferAccept, 1);
+                        acceptSocket.SetSocketOption(SOL_TCP, TCP_DEFER_ACCEPT, 1);
                     }
                     acceptSocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
                     if (_transportOptions.ZeroCopy && _transportOptions.ZeroCopyThreshold != LinuxTransportOptions.NoZeroCopy)
                     {
-                        if (acceptSocket.TrySetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ZeroCopy, 1))
+                        if (acceptSocket.TrySetSocketOption(SOL_SOCKET, SO_ZEROCOPY, 1))
                         {
                             acceptSocket.ZeroCopyThreshold = _transportOptions.ZeroCopyThreshold;
                         }
@@ -454,7 +456,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                 int readableSocketCount = readableSockets.Count;
                 AioCb* aioCb = AioCbs;
-                IOVector* ioVectors = IoVectorTable;
+                iovec* ioVectors = IoVectorTable;
                 PosixResult* receiveResults = stackalloc PosixResult[readableSocketCount];
                 Span<MemoryHandle> receiveMemoryHandles = MemoryHandles;
                 int receiveMemoryHandleCount = 0;
@@ -500,7 +502,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         int socketIndex = i; // assumes in-order events
                         TSocket socket = readableSockets[socketIndex];
                         (int received, int advanced, int iovLength) = UnpackReceiveState(aioEvent->Data);
-                        (bool done, PosixResult retval) = socket.InterpretReceiveResult(result, ref received, advanced, (IOVector*)aioEvent->AioCb->Buffer, iovLength);
+                        (bool done, PosixResult retval) = socket.InterpretReceiveResult(result, ref received, advanced, (iovec*)aioEvent->AioCb->Buffer, iovLength);
                         if (done)
                         {
                             receiveResults[socketIndex] = retval;
@@ -636,7 +638,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                         if (ipSocket)
                         {
-                            tsocket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, 1);
+                            tsocket.SetSocketOption(SOL_TCP, TCP_NODELAY, 1);
                         }
                     }
                     catch
@@ -830,7 +832,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     int sendCount = 0;
                     int completedCount = 0;
                     AioCb* aioCbs = AioCbs;
-                    IOVector* ioVectors = IoVectorTable;
+                    iovec* ioVectors = IoVectorTable;
                     ReadOnlySequence<byte>[] sendBuffers = _aioSendBuffers;
                     Span<MemoryHandle> memoryHandles = MemoryHandles;
                     int memoryHandleCount = 0;

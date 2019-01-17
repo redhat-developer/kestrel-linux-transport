@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -37,7 +38,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     throw new InvalidOperationException($"Invalid operation: {_state}");
                 }
-                var pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+                var pair = Socket.CreatePair(AF_UNIX, SOCK_STREAM, 0, blocking: false);
                 var updatedHandlers = new int[_handlers.Length + 1];
                 Array.Copy(_handlers, updatedHandlers, _handlers.Length);
                 updatedHandlers[updatedHandlers.Length - 1] = pair.Socket1;

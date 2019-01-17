@@ -3,6 +3,7 @@ using System.Net;
 using System.Threading.Tasks;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
+using static Tmds.LibC.Definitions;
 
 namespace Tests
 {
@@ -16,7 +17,7 @@ namespace Tests
             PosixResult result;
 
             // Create server socket
-            var serverSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var serverSocket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
             
             // Bind
             var serverAddress = new IPEndPointStruct(IPAddress.Loopback, 0);
@@ -30,7 +31,7 @@ namespace Tests
             Assert.True(result.IsSuccess);
 
             // Create client socket
-            var clientSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var clientSocket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
 
             // Connect
             result = clientSocket.TryConnect(serverAddress);
@@ -160,11 +161,11 @@ namespace Tests
             Socket socket1, socket2;
             CreateConnectedSockets(out socket1, out socket2, blocking: false);
 
-            var result = socket1.TryShutdown(SocketShutdown.Receive);
+            var result = socket1.TryShutdown(SHUT_RD);
             Assert.True(result.IsSuccess);
-            result = socket1.TryShutdown(SocketShutdown.Send);
+            result = socket1.TryShutdown(SHUT_WR);
             Assert.True(result.IsSuccess);
-            result = socket1.TryShutdown(SocketShutdown.Both);
+            result = socket1.TryShutdown(SHUT_RDWR);
             Assert.True(result.IsSuccess);
 
             socket1.Dispose();
@@ -174,27 +175,27 @@ namespace Tests
         [Fact]
         public void SocketOptionInt()
         {
-            var socket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var socket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
             
             // Set value to 1
             int value = 1;
-            var result = socket.TrySetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, value);
+            var result = socket.TrySetSocketOption(SOL_TCP, TCP_NODELAY, value);
             Assert.True(result.IsSuccess);
 
             // Check value is 1
             int readValue = 0;
-            result = socket.TryGetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, ref readValue);
+            result = socket.TryGetSocketOption(SOL_TCP, TCP_NODELAY, ref readValue);
             Assert.True(result.IsSuccess);
             Assert.Equal(value, readValue);
 
             // Set value to 0
             value = 0;
-            result = socket.TrySetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, value);
+            result = socket.TrySetSocketOption(SOL_TCP, TCP_NODELAY, value);
             Assert.True(result.IsSuccess);
 
             // Check value is 0
             readValue = 1;
-            result = socket.TryGetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, ref readValue);
+            result = socket.TryGetSocketOption(SOL_TCP, TCP_NODELAY, ref readValue);
             Assert.True(result.IsSuccess);
             Assert.Equal(value, readValue);
 
@@ -204,7 +205,7 @@ namespace Tests
         [Fact]
         public void Duplicate()
         {
-            var socket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var socket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
             var dup = socket.Duplicate();
             Assert.True(!dup.IsInvalid);
             dup.Dispose();
@@ -213,13 +214,13 @@ namespace Tests
 
         internal static void CreateConnectedSockets(out Socket socket1, out Socket socket2, bool blocking, bool ipv4 = true)
         {
-            var serverSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var serverSocket = Socket.Create(ipv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, blocking: true);
             var serverAddress = new IPEndPointStruct(ipv4 ? IPAddress.Loopback : IPAddress.IPv6Loopback , 0);
             serverSocket.Bind(serverAddress);
             serverAddress = serverSocket.GetLocalIPAddress();
             serverSocket.Listen(10);
 
-            var clientSocket = Socket.Create(ipv4 ? AddressFamily.InterNetwork : AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, blocking);
+            var clientSocket = Socket.Create(ipv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, blocking);
             clientSocket.TryConnect(serverAddress);
 
             Socket acceptedSocket;
@@ -235,7 +236,7 @@ namespace Tests
             PosixResult result;
 
             // Create server socket
-            var serverSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var serverSocket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
 
             // Bind
             var serverAddress = new IPEndPointStruct(IPAddress.Loopback, 0);
@@ -268,7 +269,7 @@ namespace Tests
         [Fact]
         public void SocketPair()
         {
-            SocketPair pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+            SocketPair pair = Socket.CreatePair(AF_UNIX, SOCK_STREAM, 0, blocking: false);
             PosixResult result;
 
             Socket socket1 = new Socket(pair.Socket1);
@@ -294,18 +295,18 @@ namespace Tests
             PosixResult result;
 
             // server socket
-            var serverSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var serverSocket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
             var serverAddress = new IPEndPointStruct(IPAddress.Loopback, 0);
             serverSocket.Bind(serverAddress);
             serverAddress = serverSocket.GetLocalIPAddress();
             serverSocket.Listen(10);
 
             // client connect
-            var clientSocket = Socket.Create(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp, blocking: true);
+            var clientSocket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
             clientSocket.TryConnect(serverAddress);
 
             // accept and pass socket
-            SocketPair pair = Socket.CreatePair(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified, blocking: false);
+            SocketPair pair = Socket.CreatePair(AF_UNIX, SOCK_STREAM, 0, blocking: false);
             result = serverSocket.TryAcceptAndSendHandleTo(pair.Socket1);
             Assert.True(result.IsSuccess);
             
