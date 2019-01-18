@@ -1,11 +1,9 @@
 project(RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native)
 
 set(SOURCES
-    pipeend.cpp
     epoll.cpp
     socket.cpp
     scheduler.cpp
-    io.cpp
     aio.cpp
 )
 
