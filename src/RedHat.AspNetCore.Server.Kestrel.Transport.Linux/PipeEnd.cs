@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -17,14 +18,44 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
     static class PipeInterop
     {
-        [DllImport(Interop.Library, EntryPoint="RHXKL_Pipe")]
-        public extern static PosixResult Pipe(out PipeEnd readEnd, out PipeEnd writeEnd, bool blocking);
+        public unsafe static PosixResult Pipe(out PipeEnd readEnd, out PipeEnd writeEnd, bool blocking)
+        {
+            int* fds = stackalloc int[2];
+            int flags = O_CLOEXEC;
+            if (!blocking)
+            {
+                flags |= O_NONBLOCK;
+            }
+
+            readEnd = new PipeEnd();
+            writeEnd = new PipeEnd();
+
+            int res = pipe2(fds, flags);
+
+            if (res == 0)
+            {
+                readEnd.SetHandle(fds[0]);
+                writeEnd.SetHandle(fds[1]);
+            }
+            else
+            {
+                readEnd = null;
+                writeEnd = null;
+            }
+
+            return PosixResult.FromReturnValue(res);
+        }
     }
 
     class PipeEnd : CloseSafeHandle
     {
-        private PipeEnd()
+        internal PipeEnd()
         {}
+
+        internal void SetHandle(int handle)
+        {
+            this.handle = new IntPtr(handle);
+        }
 
         public void WriteByte(byte b)
         {

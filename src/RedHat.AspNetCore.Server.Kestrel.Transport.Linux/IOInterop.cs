@@ -4,18 +4,76 @@
 
 using System;
 using System.Runtime.InteropServices;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
     static class IOInterop
     {
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_Close")]
-        public static extern PosixResult Close(int handle);
+        public static PosixResult Close(int handle)
+        {
+            int rv = close(handle);
 
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_Write")]
-        public static unsafe extern PosixResult Write(SafeHandle handle, byte* buf, int count);
+            return PosixResult.FromReturnValue(rv);
+        }
 
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_Read")]
-        public static unsafe extern PosixResult Read(SafeHandle handle, byte* buf, int count);
+        public static unsafe PosixResult Write(SafeHandle handle, byte* buf, int count)
+        {
+            bool addedRef = false;
+            try
+            {
+                handle.DangerousAddRef(ref addedRef);
+                if (!addedRef)
+                {
+                    throw new ObjectDisposedException(nameof(SafeHandle));
+                }
+
+                int fd = handle.DangerousGetHandle().ToInt32();
+                int rv;
+                do
+                {
+                    rv = (int)write(fd, buf, count);
+                } while (rv < 0 && errno == EINTR);
+
+                return PosixResult.FromReturnValue(rv);
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    handle.DangerousRelease();
+                }
+            }
+        }
+
+
+        public static unsafe PosixResult Read(SafeHandle handle, byte* buf, int count)
+        {
+            bool addedRef = false;
+            try
+            {
+                handle.DangerousAddRef(ref addedRef);
+                if (!addedRef)
+                {
+                    throw new ObjectDisposedException(nameof(SafeHandle));
+                }
+
+                int fd = handle.DangerousGetHandle().ToInt32();
+                int rv;
+                do
+                {
+                    rv = (int)read(fd, buf, count);
+                } while (rv < 0 && errno == EINTR);
+
+                return PosixResult.FromReturnValue(rv);
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    handle.DangerousRelease();
+                }
+            }
+        }
     }
 }
