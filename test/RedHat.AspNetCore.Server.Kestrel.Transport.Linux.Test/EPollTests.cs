@@ -1,6 +1,8 @@
 using System;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
+using Tmds.LibC;
+using static Tmds.LibC.Definitions;
 
 namespace Tests
 {
@@ -36,14 +38,14 @@ namespace Tests
             var epoll = EPoll.Create();
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for readable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.ReadEnd, EPollEvents.Readable, new EPollData() { Long = 0x0102030405060708L });
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.ReadEnd, EPOLLIN, 0x01020304);
             Assert.True(result.IsSuccess);
 
             // Not readable
@@ -54,8 +56,8 @@ namespace Tests
             pipePair1.WriteEnd.TryWrite(s_data);
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(1, events.Length);
-            Assert.Equal(EPollEvents.Readable, events[0].Events);
-            Assert.Equal(0x0102030405060708L, events[0].Data.Long);
+            Assert.Equal(EPOLLIN, events[0].events);
+            Assert.Equal(0x01020304, events[0].data.fd);
 
             epoll.Dispose();
             Dispose(pipePair1);
@@ -67,21 +69,21 @@ namespace Tests
             var epoll = EPoll.Create();
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for writable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0102030405060708L });
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.WriteEnd, EPOLLOUT, 0x01020304);
             Assert.True(result.IsSuccess);
 
             // Writable
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(1, events.Length);
-            Assert.Equal(EPollEvents.Writable, events[0].Events);
-            Assert.Equal(0x0102030405060708L, events[0].Data.Long);
+            Assert.Equal(EPOLLOUT, events[0].events);
+            Assert.Equal(0x01020304, events[0].data.fd);
 
             epoll.Dispose();
             Dispose(pipePair1);
@@ -94,29 +96,29 @@ namespace Tests
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
             var pipePair2 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for writable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0102030405060708L });
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.WriteEnd, EPOLLOUT, 0x01020304);
             Assert.True(result.IsSuccess);
 
             // Add pipePair2
-            result = epoll.TryControl(EPollOperation.Add, pipePair2.WriteEnd, EPollEvents.Writable, new EPollData() { Long = 0x0807060504030201L });
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair2.WriteEnd, EPOLLOUT, 0x04030201);
             Assert.True(result.IsSuccess);
 
             // Poll
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(2, events.Length);
-            Assert.Equal(EPollEvents.Writable, events[0].Events);
-            Assert.Equal(EPollEvents.Writable, events[1].Events);
-            var datas = new long[] { 0x0102030405060708L, 0x0807060504030201L};
-            Assert.Contains(events[0].Data.Long, datas);
-            Assert.Contains(events[1].Data.Long, datas);
-            Assert.NotEqual(events[0].Data.Long, events[1].Data.Long);
+            Assert.Equal(EPOLLOUT, events[0].events);
+            Assert.Equal(EPOLLOUT, events[1].events);
+            var datas = new long[] { 0x01020304, 0x04030201};
+            Assert.Contains(events[0].data.fd, datas);
+            Assert.Contains(events[1].data.fd, datas);
+            Assert.NotEqual(events[0].data.fd, events[1].data.fd);
 
             epoll.Dispose();
             Dispose(pipePair1);
@@ -130,18 +132,18 @@ namespace Tests
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
             var pipePair2 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for writable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.WriteEnd, EPOLLOUT, 0);
             Assert.True(result.IsSuccess);
 
             // Add pipePair2
-            result = epoll.TryControl(EPollOperation.Add, pipePair2.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair2.WriteEnd, EPOLLOUT, 0);
             Assert.True(result.IsSuccess);
 
             // Poll with maxEvents 1
@@ -159,11 +161,11 @@ namespace Tests
             var epoll = EPoll.Create();
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             // Register pipePair1 for readable with OneShot
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable | EPollEvents.OneShot, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.WriteEnd, EPOLLOUT | EPOLLONESHOT, 0);
             Assert.True(result.IsSuccess);
 
             // Poll indicates writable
@@ -175,7 +177,7 @@ namespace Tests
             Assert.Equal(0, events.Length);
 
             // Rearm without OneShot
-            result = epoll.TryControl(EPollOperation.Modify, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_MOD, pipePair1.WriteEnd, EPOLLOUT, 0);
 
             // Poll indicates writable
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
@@ -195,11 +197,11 @@ namespace Tests
             var epoll = EPoll.Create();
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             // Register pipePair1 for writable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.WriteEnd, EPOLLOUT, 0);
             Assert.True(result.IsSuccess);
 
             // Poll indicates writable
@@ -207,7 +209,7 @@ namespace Tests
             Assert.Equal(1, events.Length);
 
             // Unregister
-            result = epoll.TryControl(EPollOperation.Delete, pipePair1.WriteEnd, EPollEvents.None, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_DEL, pipePair1.WriteEnd, 0, 0);
 
             // Flush pending
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
@@ -241,14 +243,14 @@ namespace Tests
             var epoll = EPoll.Create();
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(0, events.Length);
 
             // Register pipePair1 for readable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.ReadEnd, EPollEvents.Readable, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.ReadEnd, EPOLLIN, 0);
             Assert.True(result.IsSuccess);
 
             // Close the write end
@@ -257,7 +259,7 @@ namespace Tests
             // Poll returns HangUp
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(1, events.Length);
-            Assert.Equal(EPollEvents.HangUp, events[0].Events);
+            Assert.Equal(EPOLLHUP, events[0].events);
 
             epoll.Dispose();
             pipePair1.ReadEnd.Dispose();
@@ -269,7 +271,7 @@ namespace Tests
             var epoll = EPoll.Create();
             var pipePair1 = PipeEnd.CreatePair(blocking: true);
 
-            EPollEvent[] events;
+            epoll_event[] events;
             PosixResult result;
 
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
@@ -279,29 +281,27 @@ namespace Tests
             pipePair1.ReadEnd.Dispose();
 
             // Register pipePair1 for readable
-            result = epoll.TryControl(EPollOperation.Add, pipePair1.WriteEnd, EPollEvents.Writable, new EPollData());
+            result = epoll.TryControl(EPOLL_CTL_ADD, pipePair1.WriteEnd, EPOLLOUT, 0);
             Assert.True(result.IsSuccess);
 
             // Poll returns Writable, Error
             events = PollEvents(epoll, maxEvents: 10, timeout: 0);
             Assert.Equal(1, events.Length);
-            Assert.Equal(EPollEvents.Writable | EPollEvents.Error, events[0].Events);
+            Assert.Equal(EPOLLOUT | EPOLLERR, events[0].events);
 
             epoll.Dispose();
             pipePair1.WriteEnd.Dispose();
         }
 
-        internal static unsafe EPollEvent[] PollEvents(EPoll epoll, int maxEvents, int timeout)
+        internal static unsafe epoll_event[] PollEvents(EPoll epoll, int maxEvents, int timeout)
         {
-            bool isPackedEvents = EPoll.PackedEvents;
-            EPollEvent* events = stackalloc EPollEvent[isPackedEvents ? 0 : maxEvents];
-            EPollEventPacked* packedEvents = stackalloc EPollEventPacked[isPackedEvents ? maxEvents : 0];
-            int nrEvents = epoll.Wait(events != null ? (void*)events : (void*)packedEvents, maxEvents, timeout);
-            var retval = new EPollEvent[nrEvents];
+            epoll_event* events = stackalloc epoll_event[maxEvents];
+            int nrEvents = epoll.Wait(events, maxEvents, timeout);
+            var retval = new epoll_event[nrEvents];
             for (int i = 0; i < nrEvents; i++)
             {
-                retval[i].Events = isPackedEvents ? packedEvents[i].Events : events[i].Events;
-                retval[i].Data   = isPackedEvents ? packedEvents[i].Data   : events[i].Data;
+                retval[i].events = events[i].events;
+                retval[i].data.fd   = events[i].data.fd;
             }
             return retval;
         }
