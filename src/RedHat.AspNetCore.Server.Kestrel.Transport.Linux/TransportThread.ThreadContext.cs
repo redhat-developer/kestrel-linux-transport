@@ -184,10 +184,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 // register pipe
                 EPollInterop.EPollControl(_epollFd,
-                                        EPollOperation.Add,
+                                        EPOLL_CTL_ADD,
                                         _pipeEnds.ReadEnd.DangerousGetHandle().ToInt32(),
-                                        EPollEvents.Readable,
-                                        EPollData(PipeKey));
+                                        EPOLLIN,
+                                        PipeKey);
 
                 // create accept socket
                 {
@@ -229,8 +229,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                 try
                 {
-                    int notPacked = !EPoll.PackedEvents ? 1 : 0;
-                    var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
+                    var buffer = stackalloc epoll_event[EventBufferLength];
                     int statReadEvents = 0;
                     int statWriteEvents = 0;
                     int statAcceptEvents = 0;
@@ -244,7 +243,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     var reregisterEventSockets = new List<TSocket>(EventBufferLength);
                     var zeroCopyCompletions = new List<TSocket>(EventBufferLength);
                     bool pipeReadable = false;
-
 
                     bool running = true;
                     do
@@ -262,7 +260,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         //     ~ The old fd may be present in the buffer still, but lookup won't give a match, since it is removed
                         //     ~ from the dictionary before it is closed. If we were accepting already, a new socket could match.
                         // - this also improves cache/cpu locality of the lookup
-                        int* ptr = buffer;
+                        epoll_event* ev = buffer;
                         lock (_sockets)
                         {
                             for (int i = 0; i < numEvents; i++)
@@ -274,9 +272,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                                 // 2:Int2 = Key   ==    Int1 = Key
                                 // 3:~~~~~~~~~~         Int2 = Key
                                 //                      ~~~~~~~~~~
-                                EPollEvents events = (EPollEvents)ptr[0];
-                                int key = ptr[2];
-                                ptr += 3 + notPacked;
+                                int events = (int)ev->events;
+                                int key = ev->data.fd;
+                                ev++;
                                 TSocket tsocket;
                                 if (_sockets.TryGetValue(key, out tsocket))
                                 {
@@ -288,13 +286,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                                             var pendingEventState = tsocket.PendingEventState;
 
                                             // zero copy
-                                            if ((pendingEventState & EPollEvents.Error & events) != EPollEvents.None)
+                                            if ((pendingEventState & EPOLLERR & events) != 0)
                                             {
                                                 var copyResult = SocketInterop.CompleteZeroCopy(tsocket.Fd);
                                                 if (copyResult != PosixResult.EAGAIN)
                                                 {
-                                                    events &= ~EPollEvents.Error;
-                                                    pendingEventState &= ~EPollEvents.Error;
+                                                    events &= ~EPOLLERR;
+                                                    pendingEventState &= ~EPOLLERR;
                                                     zeroCopyCompletions.Add(tsocket);
                                                     if (copyResult == SocketInterop.ZeroCopyCopied)
                                                     {
@@ -313,28 +311,28 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                                             }
 
                                             // treat Error as Readable, Writable
-                                            if ((events & EPollEvents.Error) != EPollEvents.None)
+                                            if ((events & EPOLLERR) != 0)
                                             {
-                                                events |= EPollEvents.Readable | EPollEvents.Writable;
+                                                events |= EPOLLIN | EPOLLOUT;
                                             }
 
-                                            events &= pendingEventState & (EPollEvents.Readable | EPollEvents.Writable);
+                                            events &= pendingEventState & (EPOLLIN | EPOLLOUT);
                                             // readable
-                                            if ((events & EPollEvents.Readable) != EPollEvents.None)
+                                            if ((events & EPOLLIN) != 0)
                                             {
                                                 readableSockets.Add(tsocket);
-                                                pendingEventState &= ~EPollEvents.Readable;
+                                                pendingEventState &= ~EPOLLIN;
                                             }
                                             // writable
-                                            if ((events & EPollEvents.Writable) != EPollEvents.None)
+                                            if ((events & EPOLLOUT) != 0)
                                             {
                                                 writableSockets.Add(tsocket);
-                                                pendingEventState &= ~EPollEvents.Writable;
+                                                pendingEventState &= ~EPOLLOUT;
                                             }
 
                                             // reregister
                                             tsocket.PendingEventState = pendingEventState;
-                                            if ((pendingEventState & (EPollEvents.Readable | EPollEvents.Writable)) != EPollEvents.None)
+                                            if ((pendingEventState & (EPOLLIN | EPOLLOUT)) != 0)
                                             {
                                                 tsocket.PendingEventState |= TSocket.EventControlPending;
                                                 reregisterEventSockets.Add(tsocket);
@@ -677,10 +675,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     }
 
                     EPollInterop.EPollControl(_epollFd,
-                                              EPollOperation.Add,
+                                              EPOLL_CTL_ADD,
                                               tsocket.Fd,
-                                              EPollEvents.Readable,
-                                              EPollData(tsocket.Fd));
+                                              EPOLLIN,
+                                              tsocket.Fd);
                 }
                 catch
                 {
@@ -956,17 +954,15 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             // must be called under tsocket.Gate
-            public void UpdateEPollControl(TSocket tsocket, EPollEvents flags, bool registered)
+            public void UpdateEPollControl(TSocket tsocket, int flags, bool registered)
             {
-                flags &= EPollEvents.Readable | EPollEvents.Writable | EPollEvents.Error;
+                flags &= EPOLLIN | EPOLLOUT | EPOLLERR;
                 EPollInterop.EPollControl(_epollFd,
-                            registered ? EPollOperation.Modify : EPollOperation.Add,
+                            registered ? EPOLL_CTL_MOD : EPOLL_CTL_ADD,
                             tsocket.Fd,
-                            flags | EPollEvents.OneShot,
-                            EPollData(tsocket.Fd));
+                            flags | EPOLLONESHOT,
+                            tsocket.Fd);
             }
-
-            private static long EPollData(int fd) => (((long)(uint)fd) << 32) | (long)(uint)fd;
 
             internal static MemoryPool<byte> CreateMemoryPool()
             {

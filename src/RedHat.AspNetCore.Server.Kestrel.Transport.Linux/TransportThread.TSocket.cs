@@ -58,8 +58,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             // 8 IOVectors, take up 128B of stack, can receive/send up to 32KB
             public const int MaxIOVectorSendLength = 8;
             public const int MaxIOVectorReceiveLength = 8;
-            private const EPollEvents EventControlRegistered = (EPollEvents)SocketFlags.EventControlRegistered;
-            public const EPollEvents EventControlPending = (EPollEvents)SocketFlags.EventControlPending;
+            private const int EventControlRegistered = (int)SocketFlags.EventControlRegistered;
+            public const int EventControlPending = (int)SocketFlags.EventControlPending;
 
             private static readonly int MaxBufferSize = KestrelMemoryPool.MinimumSegmentSize;
             private static readonly int BufferMargin = MaxBufferSize / 4;
@@ -110,9 +110,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private bool HasFlag(SocketFlags flags, SocketFlags flag) => (_flags & flag) != 0;
 
             // must be called under Gate
-            public EPollEvents PendingEventState
+            public int PendingEventState
             {
-                get => (EPollEvents)_flags;
+                get => (int)_flags;
                 set => _flags = (SocketFlags)value;
             }
 
@@ -337,7 +337,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     // not registered
                     lock (Gate)
                     {
-                        RegisterFor(EPollEvents.Error);
+                        RegisterFor(EPOLLERR);
                     }
                     return false;
                 }
@@ -380,7 +380,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     stopped = HasFlag(SocketFlags.WriteCanceled);
                     if (!stopped)
                     {
-                        RegisterFor(EPollEvents.Writable);
+                        RegisterFor(EPOLLOUT);
                     }
                 }
                 if (stopped)
@@ -403,15 +403,15 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private void RegisterFor(EPollEvents ev)
+            private void RegisterFor(int ev)
             {
                 // called under tsocket.Gate
                 var pendingEventState = PendingEventState;
-                bool registered = (pendingEventState & TSocket.EventControlRegistered) != EPollEvents.None;
+                bool registered = (pendingEventState & TSocket.EventControlRegistered) != 0;
                 pendingEventState |= TSocket.EventControlRegistered | ev;
                 PendingEventState = pendingEventState;
 
-                if ((pendingEventState & TSocket.EventControlPending) == EPollEvents.None)
+                if ((pendingEventState & TSocket.EventControlPending) == 0)
                 {
                     _threadContext.UpdateEPollControl(this, pendingEventState, registered);
                 }
@@ -597,7 +597,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     stopped = HasFlag(SocketFlags.ReadCanceled);
                     if (!stopped)
                     {
-                        RegisterFor(EPollEvents.Readable);
+                        RegisterFor(EPOLLIN);
                     }
                 }
                 if (stopped)
@@ -755,9 +755,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         }
 
                         // If we have a pending Readable event, it will report on the zero-copy completion too.
-                        if ((PendingEventState & EPollEvents.Readable) != EPollEvents.None)
+                        if ((PendingEventState & EPOLLIN) != 0)
                         {
-                            PendingEventState |= EPollEvents.Error;
+                            PendingEventState |= EPOLLERR;
                             zeroCopyRegistered = true;
                         }
                     }
@@ -769,7 +769,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     lock (Gate)
                     {
-                        PendingEventState &= ~EPollEvents.Error;
+                        PendingEventState &= ~EPOLLERR;
                     }
                     zeroCopyRegistered = false;
                 }

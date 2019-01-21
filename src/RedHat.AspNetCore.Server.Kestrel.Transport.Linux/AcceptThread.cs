@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
 using static Tmds.LibC.Definitions;
+using Tmds.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -122,24 +123,20 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         const int acceptKey = 0;
                         const int pipeKey = 1;
                         // accept socket
-                        epoll.Control(EPollOperation.Add, _socket, EPollEvents.Readable, new EPollData { Int1 = acceptKey, Int2 = acceptKey});
+                        epoll.Control(EPOLL_CTL_ADD, _socket, EPOLLIN, acceptKey);
                         // add pipe
-                        epoll.Control(EPollOperation.Add, _pipeEnds.ReadEnd, EPollEvents.Readable, new EPollData { Int1 = pipeKey, Int2 = pipeKey});
+                        epoll.Control(EPOLL_CTL_ADD, _pipeEnds.ReadEnd, EPOLLIN, pipeKey);
 
-                        const int EventBufferLength = 1;
-                        int notPacked = !EPoll.PackedEvents ? 1 : 0;
-                        var buffer = stackalloc int[EventBufferLength * (3 + notPacked)];
-                        int* key = &buffer[2];
-
+                        epoll_event ev;
                         bool running = true;
                         int nextHandler = 0;
                         var handlers = _handlers;
                         do
                         {
-                            int numEvents = EPollInterop.EPollWait(epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
+                            int numEvents = EPollInterop.EPollWait(epollFd, &ev, 1, timeout: EPoll.TimeoutInfinite).Value;
                             if (numEvents == 1)
                             {
-                                if (*key == acceptKey)
+                                if (ev.data.fd == acceptKey)
                                 {
                                     var handler = handlers[nextHandler];
                                     nextHandler = (nextHandler + 1) % handlers.Length;

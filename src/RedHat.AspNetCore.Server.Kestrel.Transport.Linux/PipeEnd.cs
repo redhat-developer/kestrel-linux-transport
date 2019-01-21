@@ -52,11 +52,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         internal PipeEnd()
         {}
 
-        internal void SetHandle(int handle)
-        {
-            this.handle = new IntPtr(handle);
-        }
-
         public void WriteByte(byte b)
         {
             TryWriteByte(b)

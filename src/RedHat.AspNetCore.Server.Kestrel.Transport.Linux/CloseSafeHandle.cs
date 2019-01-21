@@ -17,6 +17,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             : base(new IntPtr(handle), true)
         {}
 
+        internal void SetHandle(int descriptor)
+        {
+            base.SetHandle((IntPtr)descriptor);
+        }
+
         public override bool IsInvalid
         {
             get { return handle == new IntPtr(-1); }

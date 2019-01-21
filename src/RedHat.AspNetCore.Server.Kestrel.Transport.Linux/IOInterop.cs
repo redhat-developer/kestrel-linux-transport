@@ -23,10 +23,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             try
             {
                 handle.DangerousAddRef(ref addedRef);
-                if (!addedRef)
-                {
-                    throw new ObjectDisposedException(nameof(SafeHandle));
-                }
 
                 int fd = handle.DangerousGetHandle().ToInt32();
                 int rv;
@@ -53,10 +49,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             try
             {
                 handle.DangerousAddRef(ref addedRef);
-                if (!addedRef)
-                {
-                    throw new ObjectDisposedException(nameof(SafeHandle));
-                }
 
                 int fd = handle.DangerousGetHandle().ToInt32();
                 int rv;

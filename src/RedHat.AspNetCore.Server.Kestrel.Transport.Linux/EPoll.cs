@@ -1,54 +1,67 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
+using static Tmds.LibC.Definitions;
+using Tmds.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
     static class EPollInterop
     {
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_EPollCreate")]
-        public static extern PosixResult EPollCreate(out EPoll epoll);
+        public static PosixResult EPollCreate(out EPoll epoll)
+        {
+            epoll = new EPoll();
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_EPollWait")]
-        public static unsafe extern PosixResult EPollWait(int epoll, void* events, int maxEvents, int timeout);
-        public static unsafe PosixResult EPollWait(EPoll epoll, void* events, int maxEvents, int timeout)
+            int rv = epoll_create1(EPOLL_CLOEXEC);
+
+            if (rv == -1)
+            {
+                epoll = null;
+            }
+            else
+            {
+                epoll.SetHandle(rv);
+            }
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult EPollWait(int epoll, epoll_event* events, int maxEvents, int timeout)
+        {
+            int rv;
+            do
+            {
+                rv = epoll_wait(epoll, events, maxEvents, timeout);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static unsafe PosixResult EPollWait(EPoll epoll, epoll_event* events, int maxEvents, int timeout)
         => EPollWait(epoll.DangerousGetHandle().ToInt32(), events, maxEvents, timeout);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_EPollControl")]
-        public static extern PosixResult EPollControl(int epoll, EPollOperation operation, int fd, EPollEvents events, long data);
-        public static PosixResult EPollControl(EPoll epoll, EPollOperation operation, SafeHandle fd, EPollEvents events, long data)
-        => EPollControl(epoll.DangerousGetHandle().ToInt32(), operation, fd.DangerousGetHandle().ToInt32(), events, data);
+        public static unsafe PosixResult EPollControl(int epoll, int operation, int fd, int events, int data)
+        {
+            epoll_event ev = default(epoll_event);
+            ev.events = events;
+            ev.data.fd = data;
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_SizeOfEPollEvent")]
-        public static extern int SizeOfEPollEvent();
+            int rv = epoll_ctl(epoll, operation, fd, &ev);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public static PosixResult EPollControl(EPoll epoll, int operation, SafeHandle fd, int events, int data)
+        => EPollControl(epoll.DangerousGetHandle().ToInt32(), operation, fd.DangerousGetHandle().ToInt32(), events, data);
     }
 
     // Warning: Some operations use DangerousGetHandle for increased performance
     class EPoll : CloseSafeHandle
     {
-        private static bool s_packedEvents = false;
-        public static bool PackedEvents => s_packedEvents;
         public const int TimeoutInfinite = -1;
         private bool _released = false;
 
-        static EPoll()
-        {
-            var epollEventSize =  EPollInterop.SizeOfEPollEvent();
-            if (epollEventSize == Marshal.SizeOf<EPollEventPacked>())
-            {
-                s_packedEvents = true;
-            }
-            else if (epollEventSize == Marshal.SizeOf<EPollEvent>())
-            {
-                s_packedEvents = false;
-            }
-            else
-            {
-                throw new NotSupportedException();
-            }
-        }
-
-        private EPoll()
+        internal EPoll()
         {}
 
         public static EPoll Create()
@@ -68,18 +81,18 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryWait(void* events, int maxEvents, int timeout)
         {
-            return EPollInterop.EPollWait(this, events, maxEvents, timeout);
+            return EPollInterop.EPollWait(this, (epoll_event*)events, maxEvents, timeout);
         }
 
-        public void Control(EPollOperation operation, SafeHandle fd, EPollEvents events, EPollData data)
+        public void Control(int operation, SafeHandle fd, int events, int data)
         {
             TryControl(operation, fd, events, data)
                 .ThrowOnError();
         }
 
-        public PosixResult TryControl(EPollOperation operation, SafeHandle fd, EPollEvents events, EPollData data)
+        public PosixResult TryControl(int operation, SafeHandle fd, int events, int data)
         {
-            return EPollInterop.EPollControl(this, operation, fd, events, data.Long);
+            return EPollInterop.EPollControl(this, operation, fd, events, data);
         }
 
         protected override bool ReleaseHandle()
