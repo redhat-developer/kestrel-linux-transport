@@ -202,16 +202,6 @@ namespace Tests
             socket.Dispose();
         }
 
-        [Fact]
-        public void Duplicate()
-        {
-            var socket = Socket.Create(AF_INET, SOCK_STREAM, IPPROTO_TCP, blocking: true);
-            var dup = socket.Duplicate();
-            Assert.True(!dup.IsInvalid);
-            dup.Dispose();
-            socket.Dispose();
-        }
-
         internal static void CreateConnectedSockets(out Socket socket1, out Socket socket2, bool blocking, bool ipv4 = true)
         {
             var serverSocket = Socket.Create(ipv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, blocking: true);
