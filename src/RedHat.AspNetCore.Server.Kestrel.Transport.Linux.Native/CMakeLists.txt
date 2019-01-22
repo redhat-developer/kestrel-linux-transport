@@ -3,7 +3,6 @@ project(RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native)
 set(SOURCES
     socket.cpp
     scheduler.cpp
-    aio.cpp
 )
 
 add_library(RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native
