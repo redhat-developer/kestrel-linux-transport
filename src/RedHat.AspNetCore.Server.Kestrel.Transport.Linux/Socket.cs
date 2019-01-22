@@ -171,9 +171,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public static unsafe PosixResult GetSockName(Socket socket, sockaddr_storage* addr)
             => GetSockName(socket.DangerousGetHandle().ToInt32(), addr);
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_Duplicate")]
-        public static extern PosixResult Duplicate(Socket socket, out Socket dup);
-
         public static unsafe PosixResult SocketPair(int domain, int type, int protocol, bool blocking, out int socket1, out int socket2)
         {
             int* sv = stackalloc int[2];
@@ -235,7 +232,15 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         int* fdptr = (int*)CMSG_DATA(cmsg);
                         socket = *fdptr;
 
-                        // TODO make non blocking!
+                        flags = fcntl(socket, F_GETFL, 0);
+                        if (blocking)
+                        {
+                            flags &= ~O_NONBLOCK;
+                        }
+                        else
+                        {
+                            flags |= O_NONBLOCK;
+                        }
                         break;
                     }
                 }
@@ -291,7 +296,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     rv = (int)sendmsg(toSocket, &header, MSG_NOSIGNAL);
                 } while (rv < 0 && errno == EINTR);
 
-                IOInterop.Close(acceptedFd); // TODO!!
+                IOInterop.Close(acceptedFd);
             }
 
             return PosixResult.FromReturnValue(rv);
@@ -734,19 +739,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
             => SocketInterop.TryGetPeerIPAddress(this, out ep);
-
-        public Socket Duplicate()
-        {
-            Socket dup;
-            var rv = TryDuplicate(out dup);
-            rv.ThrowOnError();
-            return dup;
-        }
-
-        public PosixResult TryDuplicate(out Socket dup)
-        {
-            return SocketInterop.Duplicate(this, out dup);
-        }
 
         private static void ValidateSegment(ArraySegment<byte> segment)
         {
