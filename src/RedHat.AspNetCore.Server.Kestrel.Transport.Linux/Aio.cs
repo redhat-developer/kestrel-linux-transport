@@ -1,102 +1,77 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Tmds.LibC;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    enum AioOpCode : ushort
-    {
-        PRead = 0,
-        PWrite = 1,
-        FSync = 2,
-        FdSync = 3,
-        PReadX = 4,
-        Poll = 5,
-        Noop = 6,
-        PReadv = 7,
-        PWritev = 8
-    }
-
-    struct AioEvent
-    {
-        public long          Data;
-        private ulong       _iocb;
-        private long        _res;
-        private long        _res2;
-
-        public PosixResult   Result => new PosixResult((int)_res);
-        public unsafe AioCb* AioCb => (AioCb*)_iocb;
-    }
-
-    struct AioCb
-    {
-        public long          Data;
-        private long        _keyRwFlags;
-        public AioOpCode     OpCode;
-        private short       _reqPrio;
-        public int           Fd;
-        private ulong       _buf;
-        private ulong       _nBytes;
-        private long        _offset;
-        private ulong       _reserved2;
-        private uint        _flags;
-        private uint        _resFd;
-
-        public unsafe void*  Buffer { set { _buf = (ulong)value; } get { return (void*)_buf; } }
-        public int           Length { set { _nBytes = (ulong)value; } }
-    }
-
-    struct AioRing
-    {
-        public int Id;
-        public int Nr;
-        public volatile int Head;
-        public volatile int Tail;
-        public uint Magic;
-        public uint CompatFeatures;
-        public uint IncompatFeatures;
-        public int HeaderLength;
-    }
-
     static class AioInterop
     {
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_IoSetup")]
-
-        public static extern PosixResult IoSetup(int nr, out IntPtr ctxp);
-
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_IoDestroy")]
-        public static extern PosixResult IoDestroy(IntPtr ctxp);
-
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_IoSubmit")]
-        public unsafe static extern PosixResult IoSubmit(IntPtr ctxp, int nr, AioCb** iocbpp);
-
-        [DllImport(Interop.Library, EntryPoint = "RHXKL_IoGetEvents")]
-        public unsafe static extern PosixResult IoGetEvents(IntPtr ctxp, int minNr, int maxNr, AioEvent* events, int timeoutMs);
-
-        public unsafe static PosixResult IoGetEvents(IntPtr ctxp, int nr, AioEvent* events)
+        public unsafe static PosixResult IoSetup(int nr, aio_context_t* ring)
         {
+            int rv = io_setup((uint)nr, ring);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult IoDestroy(aio_context_t ctx)
+        {
+            int rv = io_destroy(ctx);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult IoSubmit(aio_context_t ctx, int nr, iocb** iocbpp)
+        {
+            int rv = io_submit(ctx, nr, iocbpp);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+
+        public unsafe static PosixResult IoGetEvents(aio_context_t ctx, int min_nr, int nr, io_event* events, int timeoutMs)
+        {
+            timespec timeout = default(timespec);
+            bool hasTimeout = timeoutMs >= 0;
+            if (hasTimeout)
+            {
+                timeout.tv_sec = timeoutMs / 1000;
+                timeout.tv_nsec = 1000 * (timeoutMs % 1000);
+            }
+            int rv;
+            do
+            {
+                rv = io_getevents(ctx, min_nr, nr, events, hasTimeout ? &timeout : null);
+            } while (rv < 0 && errno == EINTR);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult IoGetEvents(aio_context_t ctx, int nr, io_event* events)
+        {
+            aio_ring* pRing = ctx.ring;
             if (nr <= 0)
             {
                 return new PosixResult(PosixResult.EINVAL);
             }
-            AioRing* pRing = (AioRing*)ctxp;
-            if (pRing->Magic == 0xa10a10a1 && pRing->IncompatFeatures == 0)
+            if (pRing->magic == 0xa10a10a1 && pRing->incompat_features == 0)
             {
-                int head = pRing->Head;
-                int tail = pRing->Tail;
+                int head = (int)pRing->head;
+                int tail = (int)pRing->tail;
                 int available = tail - head;
                 if (available < 0)
                 {
-                    available += pRing->Nr;
+                    available += (int)pRing->nr;
                 }
                 if (available >= nr)
                 {
-                    AioEvent* ringEvents = (AioEvent*)((byte*)pRing + pRing->HeaderLength);
-                    AioEvent* start = ringEvents + head;
-                    AioEvent* end = start + nr;
-                    if (head + nr > pRing->Nr)
+                    io_event* ringEvents = (io_event*)((byte*)pRing + pRing->header_length);
+                    io_event* start = ringEvents + head;
+                    io_event* end = start + nr;
+                    if (head + nr > pRing->nr)
                     {
-                        end -= pRing->Nr;
+                        end -= pRing->nr;
                     }
                     if (end > start)
                     {
@@ -104,26 +79,26 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     }
                     else
                     {
-                        AioEvent* eventsEnd = Copy(start, ringEvents + pRing->Nr, events);
+                        io_event* eventsEnd = Copy(start, ringEvents + pRing->nr, events);
                         Copy(ringEvents, end, eventsEnd);
                     }
                     head += nr;
-                    if (head >= pRing->Nr)
+                    if (head >= pRing->nr)
                     {
-                        head -= pRing->Nr;
+                        head -= (int)pRing->nr;
                     }
-                    pRing->Head = head;
+                    pRing->head = (uint)head;
                     return new PosixResult(nr);
                 }
             }
-            return IoGetEvents(ctxp, nr, nr, events, -1);
+            return IoGetEvents(ctx, nr, nr, events, -1);
         }
 
-        private static unsafe AioEvent* Copy(AioEvent* start, AioEvent* end, AioEvent* dst)
+        private static unsafe io_event* Copy(io_event* start, io_event* end, io_event* dst)
         {
             uint byteCount = (uint)((byte*)end - (byte*)start);
             Unsafe.CopyBlock(dst, start, byteCount);
-            return (AioEvent*)((byte*)dst + byteCount);
+            return (io_event*)((byte*)dst + byteCount);
         }
     }
 }
