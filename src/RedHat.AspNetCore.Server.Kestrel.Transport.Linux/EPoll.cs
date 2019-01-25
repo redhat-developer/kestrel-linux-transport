@@ -59,7 +59,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
     class EPoll : CloseSafeHandle
     {
         public const int TimeoutInfinite = -1;
-        private bool _released = false;
 
         internal EPoll()
         {}
@@ -72,18 +71,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             return epoll;
         }
 
-        public unsafe int Wait(void* events, int maxEvents, int timeout)
-        {
-            var result = TryWait(events, maxEvents, timeout);
-            result.ThrowOnError();
-            return result.Value;
-        }
-
-        public unsafe PosixResult TryWait(void* events, int maxEvents, int timeout)
-        {
-            return EPollInterop.EPollWait(this, (epoll_event*)events, maxEvents, timeout);
-        }
-
         public void Control(int operation, SafeHandle fd, int events, int data)
         {
             TryControl(operation, fd, events, data)
@@ -93,31 +80,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public PosixResult TryControl(int operation, SafeHandle fd, int events, int data)
         {
             return EPollInterop.EPollControl(this, operation, fd, events, data);
-        }
-
-        protected override bool ReleaseHandle()
-        {
-            _released = true;
-            return base.ReleaseHandle();
-        }
-
-        // This method will only return when the EPoll has been closed.
-        // Calls to Control will then throw ObjectDisposedException.
-        public void BlockingDispose()
-        {
-            if (IsInvalid)
-            {
-                return;
-            }
-
-            Dispose();
-
-            // block until the refcount drops to zero
-            SpinWait sw = new SpinWait();
-            while (!_released)
-            {
-                sw.SpinOnce();
-            }
         }
     }
 }
