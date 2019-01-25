@@ -50,8 +50,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             return result;
         }
 
-        [DllImportAttribute(Interop.Library, EntryPoint = "RHXKL_GetAvailableBytes")]
-        public static extern PosixResult GetAvailableBytes(int socket);
+        public static unsafe PosixResult GetAvailableBytes(int socket)
+        {
+            int availableBytes;
+            int rv = ioctl(socket, FIONREAD, &availableBytes);
+
+            return PosixResult.FromReturnValue(rv == -1 ? rv : availableBytes);
+        }
 
         public static PosixResult GetAvailableBytes(Socket socket)
             => GetAvailableBytes(socket.DangerousGetHandle().ToInt32());
