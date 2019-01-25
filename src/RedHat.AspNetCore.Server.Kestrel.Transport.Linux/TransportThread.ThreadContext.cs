@@ -966,7 +966,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             internal static MemoryPool<byte> CreateMemoryPool()
             {
-                // TODO: remove duplicate code
                 return KestrelMemoryPool.Create();
             }
 

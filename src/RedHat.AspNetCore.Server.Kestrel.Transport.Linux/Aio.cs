@@ -8,9 +8,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
     static class AioInterop
     {
-        public unsafe static PosixResult IoSetup(int nr, aio_context_t* ring)
+        public unsafe static PosixResult IoSetup(int nr, aio_context_t* ctx)
         {
-            int rv = io_setup((uint)nr, ring);
+            int rv = io_setup((uint)nr, ctx);
 
             return PosixResult.FromReturnValue(rv);
         }

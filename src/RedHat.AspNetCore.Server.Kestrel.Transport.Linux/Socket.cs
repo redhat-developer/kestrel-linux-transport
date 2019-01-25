@@ -413,7 +413,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static unsafe bool ToIPEndPointStruct(sockaddr_storage* addr, out IPEndPointStruct ep, IPAddress reuseAddress = null)
         {
-            // TODO: move to Tmds.LibC?
             if (addr->ss_family == AF_INET)
             {
                 sockaddr_in* addrIn = (sockaddr_in*)addr;
@@ -546,7 +545,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         private static void GetSockaddrUn(string unixPath, out sockaddr_un addr)
         {
-            // TODO: move to Tmds.LibC?
             addr = default(sockaddr_un);
             addr.sun_family = AF_UNIX;
             var bytes = Encoding.UTF8.GetBytes(unixPath);
@@ -563,17 +561,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         internal static unsafe void GetSockaddrInet(IPEndPointStruct inetAddress, sockaddr_storage* addr, out int length)
         {
-            // TODO: move to Tmds.LibC?
             if (inetAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
             {
                 sockaddr_in* addrIn = (sockaddr_in*)addr;
                 addrIn->sin_family = AF_INET;
                 addrIn->sin_port = htons((ushort)inetAddress.Port);
-                byte[] addressBytes = inetAddress.Address.GetAddressBytes(); // TODO: remove allocation
-                for (int i = 0; i < 4; i++)
-                {
-                    addrIn->sin_addr.s_addr[i] = addressBytes[i];
-                }
+                int bytesWritten;
+                inetAddress.Address.TryWriteBytes(new Span<byte>(addrIn->sin_addr.s_addr, 4), out bytesWritten);
                 length = SizeOf.sockaddr_in;
             }
             else if (inetAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
@@ -583,11 +577,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 addrIn->sin6_port = htons((ushort)inetAddress.Port);
                 addrIn->sin6_flowinfo = 0;
                 addrIn->sin6_scope_id = 0;
-                byte[] addressBytes = inetAddress.Address.GetAddressBytes(); // TODO: remove allocation
-                for (int i = 0; i < 16; i++)
-                {
-                    addrIn->sin6_addr.s6_addr[i] = addressBytes[i];
-                }
+                int bytesWritten;
+                inetAddress.Address.TryWriteBytes(new Span<byte>(addrIn->sin6_addr.s6_addr, 16), out bytesWritten);
                 length = SizeOf.sockaddr_in6;
             }
             else
