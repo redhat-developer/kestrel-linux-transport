@@ -1,7 +1,6 @@
 project(RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native)
 
 set(SOURCES
-    socket.cpp
     scheduler.cpp
 )
 
