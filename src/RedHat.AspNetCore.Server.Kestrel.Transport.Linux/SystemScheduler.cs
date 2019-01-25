@@ -1,17 +1,49 @@
 using System.Runtime.InteropServices;
+using Tmds.LibC;
+using static Tmds.LibC.Definitions;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
     class SchedulerInterop
     {
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_SetCurrentThreadAffinity")]
-        public extern static PosixResult SetCurrentThreadAffinity(int cpuId);
-        [DllImport(Interop.Library, EntryPoint="RHXKL_ClearCurrentThreadAffinity")]
-        public extern static PosixResult ClearCurrentThreadAffinity();
+        public unsafe static PosixResult SetCurrentThreadAffinity(int cpuId)
+        {
+            cpu_set_t cpu_set;
+            CPU_ZERO(&cpu_set);
+            CPU_SET(cpuId, &cpu_set);
 
-        [DllImport(Interop.Library, EntryPoint="RHXKL_GetAvailableCpusForProcess")]
-        public extern static PosixResult GetAvailableCpusForProcess();
+            int rv = sched_setaffinity(0, SizeOf.cpu_set_t, &cpu_set);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult ClearCurrentThreadAffinity()
+        {
+            cpu_set_t cpu_set;
+            CPU_ZERO(&cpu_set);
+            for (int cpuId = 0; cpuId < CPU_SETSIZE; cpuId++)
+            {
+                CPU_SET(cpuId, &cpu_set);
+            }
+
+            int rv = sched_setaffinity(0, SizeOf.cpu_set_t, &cpu_set);
+
+            return PosixResult.FromReturnValue(rv);
+        }
+
+        public unsafe static PosixResult GetAvailableCpusForProcess()
+        {
+            cpu_set_t set;
+
+            int rv = sched_getaffinity (getpid(), SizeOf.cpu_set_t, &set);
+            if (rv == 0)
+            {
+                rv = CPU_COUNT (&set);
+            }
+
+            return PosixResult.FromReturnValue(rv);
+        }
     }
 
     class SystemScheduler

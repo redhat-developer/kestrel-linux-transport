@@ -42,7 +42,6 @@ public static IWebHost BuildWebHost(string[] args) =>
 
 There are 5 projects in this repository:
 - src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux: managed library implementing Transport
-- src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native: native library used by managed library
 - samples/KestrelSample: Kestrel app for [benchmarking](Benchmark.md)
 - test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Test: xunit test projects, has access to internals of managed library
 - test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.TestApp: empty application to use during development, has access to internals of managed library

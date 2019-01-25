@@ -10,14 +10,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="..\..\bin\Linux.x64.Release\Native\RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Native.so" PackagePath="runtimes/linux-x64/native" Pack="true" CopyToOutputDirectory="Always" />
-  </ItemGroup>
-
-  <Target Name="PrecompileScript" BeforeTargets="BeforeBuild">
-    <Exec Command="../build-native.sh" />
-  </Target>
-
-  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions" Version="$(AspNetCoreVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.Hosting.Abstractions" Version="$(AspNetCoreVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(AspNetCoreVersion)" />
