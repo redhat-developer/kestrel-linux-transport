@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
-using static Tmds.LibC.Definitions;
+using static Tmds.Linux.LibC;
 
 namespace Tests
 {

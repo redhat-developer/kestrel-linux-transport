@@ -7,10 +7,10 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Tmds.LibC;
+using Tmds.Linux;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
-using static Tmds.LibC.Definitions;
+using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {

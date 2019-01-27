@@ -8,13 +8,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
     internal partial struct PosixResult
     {
-        public static int EAFNOSUPPORT => -Tmds.LibC.Definitions.EAFNOSUPPORT;
-        public static int EAGAIN => -Tmds.LibC.Definitions.EAGAIN;
-        public static int ECONNABORTED => -Tmds.LibC.Definitions.ECONNABORTED;
-        public static int ECONNRESET => -Tmds.LibC.Definitions.ECONNRESET;
-        public static int EINVAL => -Tmds.LibC.Definitions.EINVAL;
-        public static int ENOBUFS => -Tmds.LibC.Definitions.ENOBUFS;
-        public static int EPIPE => -Tmds.LibC.Definitions.EPIPE;
-        public static int ECONNREFUSED => -Tmds.LibC.Definitions.ECONNREFUSED;
+        public static int EAFNOSUPPORT => -Tmds.Linux.LibC.EAFNOSUPPORT;
+        public static int EAGAIN => -Tmds.Linux.LibC.EAGAIN;
+        public static int ECONNABORTED => -Tmds.Linux.LibC.ECONNABORTED;
+        public static int ECONNRESET => -Tmds.Linux.LibC.ECONNRESET;
+        public static int EINVAL => -Tmds.Linux.LibC.EINVAL;
+        public static int ENOBUFS => -Tmds.Linux.LibC.ENOBUFS;
+        public static int EPIPE => -Tmds.Linux.LibC.EPIPE;
+        public static int ECONNREFUSED => -Tmds.Linux.LibC.ECONNREFUSED;
     }
 }

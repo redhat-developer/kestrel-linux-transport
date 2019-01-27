@@ -4,7 +4,7 @@
 
 using System;
 using System.Runtime.InteropServices;
-using static Tmds.LibC.Definitions;
+using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {

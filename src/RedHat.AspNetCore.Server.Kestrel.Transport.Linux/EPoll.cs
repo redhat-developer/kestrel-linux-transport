@@ -1,8 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
-using static Tmds.LibC.Definitions;
-using Tmds.LibC;
+using static Tmds.Linux.LibC;
+using Tmds.Linux;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {

@@ -4,7 +4,7 @@
 
 using System;
 using System.Runtime.InteropServices;
-using static Tmds.LibC.Definitions;
+using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -14,7 +14,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             int maxBufferLength = 1024; // should be long enough for most any UNIX error
             byte* buffer = stackalloc byte[maxBufferLength];
-            int rv = Tmds.LibC.Definitions.strerror_r(errno, buffer, maxBufferLength);
+            int rv = Tmds.Linux.LibC.strerror_r(errno, buffer, maxBufferLength);
             return rv == 0 ? Marshal.PtrToStringAnsi((IntPtr)buffer) : $"errno={errno}";
         }
     }

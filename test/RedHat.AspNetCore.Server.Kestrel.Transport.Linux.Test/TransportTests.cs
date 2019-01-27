@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
-using static Tmds.LibC.Definitions;
+using static Tmds.Linux.LibC;
 
 namespace Tests
 {
