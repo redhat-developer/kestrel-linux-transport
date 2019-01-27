@@ -249,7 +249,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     bool running = true;
                     do
                     {
-                        int numEvents = EPollInterop.EPollWait(_epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).Value;
+                        int numEvents = EPollInterop.EPollWait(_epollFd, buffer, EventBufferLength, timeout: EPoll.TimeoutInfinite).IntValue;
 
                         // actions can be scheduled without unblocking epoll
                         SetEpollNotBlocked();
@@ -771,7 +771,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _pipeEnds.WriteEnd.WriteByte(operation);
                 }
                 // All sockets stopped already and the PipeEnd was disposed
-                catch (IOException ex) when (ex.HResult == PosixResult.EPIPE)
+                catch (IOException ex) when (ex.HResult == EPIPE)
                 { }
                 catch (ObjectDisposedException)
                 { }

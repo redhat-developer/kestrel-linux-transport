@@ -89,7 +89,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             var result = TryWrite(buffer);
             result.ThrowOnError();
-            return result.Value;
+            return result.IntValue;
         }
 
         public new PosixResult TryWrite(ArraySegment<byte> buffer)
@@ -101,7 +101,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             var result = TryRead(buffer);
             result.ThrowOnError();
-            return result.Value;
+            return result.IntValue;
         }
 
         public new PosixResult TryRead(ArraySegment<byte> buffer)

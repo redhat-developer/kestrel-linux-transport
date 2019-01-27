@@ -89,7 +89,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         _pipeEnds.WriteEnd?.WriteByte(0);
                     }
-                    catch (IOException ex) when (ex.HResult == PosixResult.EPIPE)
+                    catch (IOException ex) when (ex.HResult == EPIPE)
                     {}
                     catch (ObjectDisposedException)
                     {}
@@ -133,7 +133,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         var handlers = _handlers;
                         do
                         {
-                            int numEvents = EPollInterop.EPollWait(epollFd, &ev, 1, timeout: EPoll.TimeoutInfinite).Value;
+                            int numEvents = EPollInterop.EPollWait(epollFd, &ev, 1, timeout: EPoll.TimeoutInfinite).IntValue;
                             if (numEvents == 1)
                             {
                                 if (ev.data.fd == acceptKey)

@@ -4,6 +4,7 @@
 
 using System;
 using System.Runtime.InteropServices;
+using Tmds.Linux;
 using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
@@ -25,10 +26,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 handle.DangerousAddRef(ref addedRef);
 
                 int fd = handle.DangerousGetHandle().ToInt32();
-                int rv;
+                ssize_t rv;
                 do
                 {
-                    rv = (int)write(fd, buf, count);
+                    rv = write(fd, buf, count);
                 } while (rv < 0 && errno == EINTR);
 
                 return PosixResult.FromReturnValue(rv);
@@ -51,10 +52,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 handle.DangerousAddRef(ref addedRef);
 
                 int fd = handle.DangerousGetHandle().ToInt32();
-                int rv;
+                ssize_t rv;
                 do
                 {
-                    rv = (int)read(fd, buf, count);
+                    rv = read(fd, buf, count);
                 } while (rv < 0 && errno == EINTR);
 
                 return PosixResult.FromReturnValue(rv);

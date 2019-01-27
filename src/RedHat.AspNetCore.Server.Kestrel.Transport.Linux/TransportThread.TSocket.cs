@@ -537,7 +537,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 PipeWriter writer = Input;
                 if (result.IsSuccess)
                 {
-                    received += result.Value;
+                    received += result.IntValue;
                     if (received >= advanced)
                     {
                         // We made it!
@@ -564,11 +564,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         return (true, new PosixResult(received == 0 ? 0 : 1));
                     }
                     // Update ioVectors to match bytes read
-                    var skip = result.Value;
+                    var skip = (size_t)result.Value;
                     for (int i = 0; (i < ioVectorLength) && (skip > 0); i++)
                     {
-                        var length = (int)ioVectors[i].iov_len;
-                        var skipped = Math.Min(skip, length);
+                        var length = ioVectors[i].iov_len;
+                        var skipped = skip < length ? skip : length;
                         ioVectors[i].iov_len = length - skipped;
                         ioVectors[i].iov_base = (byte*)ioVectors[i].iov_base + skipped;
                         skip -= skipped;
@@ -844,7 +844,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 PosixResult result = SocketInterop.GetAvailableBytes(Fd);
                 result.ThrowOnError();
-                return result.Value;
+                return result.IntValue;
             }
 
             public void SetSocketOption(int level, int optname, int value)
