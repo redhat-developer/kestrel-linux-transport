@@ -105,10 +105,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             flags |= MSG_NOSIGNAL;
 
-            int rv;
+            ssize_t rv;
             do
             {
-                rv = (int)sendmsg(socket, &hdr, flags);
+                rv = sendmsg(socket, &hdr, flags);
             } while (rv < 0 && errno == EINTR);
 
             return PosixResult.FromReturnValue(rv);
@@ -125,10 +125,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             int flags = MSG_NOSIGNAL;
 
-            int rv;
+            ssize_t rv;
             do
             {
-                rv = (int)recvmsg(socket, &hdr, flags);
+                rv = recvmsg(socket, &hdr, flags);
             } while (rv < 0 && errno == EINTR);
 
             return PosixResult.FromReturnValue(rv);
@@ -222,10 +222,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             int flags = MSG_NOSIGNAL | MSG_CMSG_CLOEXEC;
 
-            int rv;
+            ssize_t rv;
             do
             {
-                rv = (int)recvmsg(fromSocket, &header, flags);
+                rv = recvmsg(fromSocket, &header, flags);
             } while (rv < 0 && errno == EINTR);
 
             if (rv != -1)
@@ -265,7 +265,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public unsafe static PosixResult AcceptAndSendHandleTo(Socket fromSocket, int toSocket)
         {
             int acceptFd = fromSocket.DangerousGetHandle().ToInt32();
-            int rv;
+            ssize_t rv;
             do
             {
                 rv = accept4(acceptFd, null, null, SOCK_CLOEXEC);
@@ -273,8 +273,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             if (rv != -1)
             {
-                int acceptedFd = rv;
-                
+                int acceptedFd = (int)rv;
+
                 byte dummyBuffer = 0;
                 iovec iov = default(iovec);
                 iov.iov_base = &dummyBuffer;
@@ -298,7 +298,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                 do
                 {
-                    rv = (int)sendmsg(toSocket, &header, MSG_NOSIGNAL);
+                    rv = sendmsg(toSocket, &header, MSG_NOSIGNAL);
                 } while (rv < 0 && errno == EINTR);
 
                 IOInterop.Close(acceptedFd);
@@ -318,10 +318,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 msg.msg_control = control;
                 msg.msg_controllen = controlLength;
 
-                int rv;
+                ssize_t rv;
                 do
                 {
-                    rv = (int)recvmsg(socket, &msg, MSG_NOSIGNAL| MSG_ERRQUEUE);
+                    rv = recvmsg(socket, &msg, MSG_NOSIGNAL| MSG_ERRQUEUE);
                 } while (rv < 0 && errno == EINTR);
 
                 if (rv == -1)
@@ -468,7 +468,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             var result = TryGetAvailableBytes();
             result.ThrowOnError();
-            return result.Value;
+            return result.IntValue;
         }
 
         public PosixResult TryGetAvailableBytes()
@@ -619,7 +619,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             var result = TryReceive(buffer);
             result.ThrowOnError();
-            return result.Value;
+            return result.IntValue;
         }
 
         public unsafe PosixResult TryReceive(ArraySegment<byte> buffer)
@@ -632,7 +632,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public unsafe int Receive(iovec* ioVectors, int ioVectorLen)
+        public unsafe ssize_t Receive(iovec* ioVectors, int ioVectorLen)
         {
             var result = TryReceive(ioVectors, ioVectorLen);
             result.ThrowOnError();
@@ -659,7 +659,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             var result = TrySend(buffer);
             result.ThrowOnError();
-            return result.Value;
+            return result.IntValue;
         }
 
         public unsafe PosixResult TrySend(ArraySegment<byte> buffer)
@@ -672,7 +672,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public unsafe int Send(iovec* ioVectors, int ioVectorLen)
+        public unsafe ssize_t Send(iovec* ioVectors, int ioVectorLen)
         {
             var result = TrySend(ioVectors, ioVectorLen);
             result.ThrowOnError();

@@ -74,7 +74,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             var result = SchedulerInterop.GetAvailableCpusForProcess();
             result.ThrowOnError();
-            return result.Value;
+            return result.IntValue;
         }
     }
 }

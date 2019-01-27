@@ -70,7 +70,7 @@ namespace Tests
                 await testServer.BindAsync();
                 await testServer.UnbindAsync();
                 var exception = Assert.Throws<IOException>(() => testServer.ConnectTo());
-                Assert.Equal(PosixResult.ECONNREFUSED, exception.HResult);
+                Assert.Equal(ECONNREFUSED, exception.HResult);
                 await testServer.StopAsync();
             }
         }
@@ -111,7 +111,7 @@ namespace Tests
                             client.Send(new ArraySegment<byte>(sendBuffer));
                         }                    
                     });
-                    Assert.Equal(PosixResult.EPIPE, exception.HResult);
+                    Assert.Equal(EPIPE, exception.HResult);
                 }
 
                 await testServer.StopAsync();
