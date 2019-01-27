@@ -2,8 +2,8 @@ using System;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
-using Tmds.LibC;
-using static Tmds.LibC.Definitions;
+using Tmds.Linux;
+using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -417,7 +417,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 sockaddr_in* addrIn = (sockaddr_in*)addr;
                 long value = ((addrIn->sin_addr.s_addr[3] << 24 | addrIn->sin_addr.s_addr[2] << 16 | addrIn->sin_addr.s_addr[1] << 8 | addrIn->sin_addr.s_addr[0]) & 0x0FFFFFFFF);
+#pragma warning disable CS0618 // 'IPAddress.Address' is obsolete
                 bool matchesReuseAddress = reuseAddress != null && reuseAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && reuseAddress.Address == value;
+#pragma warning restore CS0618
                 int port = ntohs(addrIn->sin_port);
                 ep = new IPEndPointStruct(matchesReuseAddress ? reuseAddress : new IPAddress(value), port);
                 return true;
