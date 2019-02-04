@@ -46,6 +46,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     if (socket == _cpuInfos[j].SocketId)
                     {
                         duplicate = true;
+                        break;
                     }
                 }
                 if (!duplicate)
@@ -74,6 +75,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     if (core == _cpuInfos[j].CoreId)
                     {
                         duplicate = true;
+                        break;
                     }
                 }
                 if (!duplicate)
