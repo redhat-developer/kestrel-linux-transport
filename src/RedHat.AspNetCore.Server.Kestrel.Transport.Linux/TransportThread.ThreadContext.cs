@@ -78,7 +78,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     _aioEventsMemory = AllocMemory(sizeof(io_event) * EventBufferLength);
                     _aioCbsMemory = AllocMemory(sizeof(iocb) * EventBufferLength);
-                    _aioCbsTableMemory = AllocMemory(sizeof(iocb*) * EventBufferLength);
+                    _aioCbsTableMemory = AllocMemory(IntPtr.Size * EventBufferLength);
                     _ioVectorTableMemory = AllocMemory(SizeOf.iovec * IoVectorsPerAioSocket * EventBufferLength);
                     for (int i = 0; i < EventBufferLength; i++)
                     {

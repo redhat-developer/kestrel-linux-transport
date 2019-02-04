@@ -246,6 +246,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         {
                             flags |= O_NONBLOCK;
                         }
+                        fcntl(socket, F_SETFL, flags);
                         break;
                     }
                 }
