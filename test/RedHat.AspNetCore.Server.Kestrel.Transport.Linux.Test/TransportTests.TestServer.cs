@@ -70,7 +70,6 @@ namespace Tests
                 AioSend = options.AioSend
             };
             var loggerFactory = new LoggerFactory();
-            loggerFactory.AddConsole((n, l) => false);
             IEndPointInformation endPoint = null;
             if (options.UnixSocketPath != null)
             {
