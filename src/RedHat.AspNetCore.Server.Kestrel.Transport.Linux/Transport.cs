@@ -2,15 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Logging;
 using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    internal class Transport : ITransport
+    internal class Transport : IConnectionListenerFactory
     {
         private enum State
         {
@@ -25,8 +26,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         // Kestrel LibuvConstants.ListenBacklog
         private const int ListenBacklog = 128;
 
-        private readonly IEndPointInformation _endPoint;
-        private readonly IConnectionDispatcher _connectionDispatcher;
+        private readonly EndPoint _endPoint;
         private readonly LinuxTransportOptions _transportOptions;
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger _logger;
@@ -34,12 +34,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         private readonly object _gate = new object();
         private ITransportActionHandler[] _threads;
 
-        public Transport(IEndPointInformation ipEndPointInformation, IConnectionDispatcher connectionDispatcher, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
+        public Transport(EndPoint ipEndPointInformation, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
-            if (connectionDispatcher == null)
-            {
-                throw new ArgumentNullException(nameof(connectionDispatcher));
-            }
             if (transportOptions == null)
             {
                 throw new ArgumentException(nameof(transportOptions));
@@ -54,7 +50,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             _endPoint = ipEndPointInformation;
-            _connectionDispatcher = connectionDispatcher;
             _transportOptions = transportOptions;
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<Transport>();
@@ -73,34 +68,28 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 _state = State.Binding;
 
-                IPEndPoint ipEndPoint;
-                switch (_endPoint.Type)
+                switch (_endPoint)
                 {
-                    case ListenType.IPEndPoint:
-                        ipEndPoint = _endPoint.IPEndPoint;
+                    case IPEndPoint ipEndPoint: 
                         acceptThread = null;
                         transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
                         break;
-                    case ListenType.SocketPath:
-                    case ListenType.FileHandle:
-                        Socket socket;
-                        if (_endPoint.Type == ListenType.SocketPath)
-                        {
-                            socket = Socket.Create(AF_UNIX, SOCK_STREAM, 0, blocking: false);
-                            File.Delete(_endPoint.SocketPath);
-                            socket.Bind(_endPoint.SocketPath);
-                            socket.Listen(ListenBacklog);
-                        }
-                        else
-                        {
-                            socket = new Socket((int)_endPoint.FileHandle);
-                        }
-                        ipEndPoint = null;
-                        acceptThread = new AcceptThread(socket);
-                        transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
+                    case UnixDomainSocketEndPoint unixDomainSocketEndPoint:
+                        var socketPath = unixDomainSocketEndPoint.ToString();
+                        var unixDomainSocket = Socket.Create(AF_UNIX, SOCK_STREAM, 0, blocking: false);
+                        File.Delete(socketPath);
+                        unixDomainSocket.Bind(socketPath);
+                        unixDomainSocket.Listen(ListenBacklog);
+                        acceptThread = new AcceptThread(unixDomainSocket);
+                        transportThreads = CreateTransportThreads(ipEndPoint: null, acceptThread);
+                        break;
+                    case FileHandleEndPoint fileHandleEndPoint:
+                        var fileHandleSocket = new Socket((int)fileHandleEndPoint.FileHandle);
+                        acceptThread = new AcceptThread(fileHandleSocket);
+                        transportThreads = CreateTransportThreads(ipEndPoint: null, acceptThread);
                         break;
                     default:
-                        throw new NotSupportedException($"Unknown ListenType: {_endPoint.Type}.");
+                        throw new NotSupportedException($"Unknown ListenType: {_endPoint.GetType()}.");
                 }
 
                 _threads = new ITransportActionHandler[transportThreads.Length + (acceptThread != null ? 1 : 0)];
