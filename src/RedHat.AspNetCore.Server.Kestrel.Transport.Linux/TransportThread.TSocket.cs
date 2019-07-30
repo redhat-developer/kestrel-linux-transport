@@ -8,7 +8,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Tmds.Linux;
 using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux

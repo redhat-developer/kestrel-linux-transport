@@ -56,7 +56,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             _threads = Array.Empty<TransportThread>();
         }
 
-        public async Task BindAsync()
+        public async ValueTask<IConnectionListener> BindAsync()
         {
             AcceptThread acceptThread;
             TransportThread[] transportThreads;
