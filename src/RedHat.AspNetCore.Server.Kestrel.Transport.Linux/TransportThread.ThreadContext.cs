@@ -8,9 +8,11 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Tmds.Linux;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 using static Tmds.Linux.LibC;
+using System.Threading.Channels;
+using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -30,13 +32,19 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private const byte PipeCloseAccept = 3;
             private const int MemoryAlignment = 8;
 
+            // Single reader, single writer queue since all writes happen from the TransportThread and reads happen sequentially
+            private readonly Channel<TSocket> _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true
+            });
+
             private readonly int _epollFd;
             private readonly EPoll _epoll;
 
             private readonly TransportThread _transportThread;
             private readonly LinuxTransportOptions _transportOptions;
             private readonly ILogger _logger;
-            private readonly IConnectionDispatcher _connectionDispatcher;
             // key is the file descriptor
             private readonly Dictionary<int, TSocket> _sockets;
             private readonly List<TSocket> _acceptSockets;
@@ -66,7 +74,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe ThreadContext(TransportThread transportThread)
             {
                 _transportThread = transportThread;
-                _connectionDispatcher = transportThread.ConnectionDispatcher;
                 _sockets = new Dictionary<int, TSocket>();
                 _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(RedHat)}.{nameof(TransportThread)}.{_transportThread.ThreadId}");
                 _acceptSockets = new List<TSocket>();
@@ -110,6 +117,30 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     aio_context_t ctx;
                     AioInterop.IoSetup(EventBufferLength, &ctx).ThrowOnError();
                     _aioContext = ctx;
+                }
+            }
+
+            public async ValueTask<TSocket> AcceptAsync(CancellationToken cancellationToken = default)
+            {
+                while (await _acceptQueue.Reader.WaitToReadAsync())
+                {
+                    while (_acceptQueue.Reader.TryRead(out var connection))
+                    {
+                        return connection;
+                    }
+                }
+
+                return null;
+            }
+
+            private async Task AbortQueuedConnectionAsync()
+            {
+                while (await _acceptQueue.Reader.WaitToReadAsync())
+                {
+                    while (_acceptQueue.Reader.TryRead(out var connection))
+                    {
+                        connection.Abort();
+                    }
                 }
             }
 
@@ -612,30 +643,29 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                             ZeroCopyThreshold = tacceptSocket.ZeroCopyThreshold
                         };
 
-                        bool ipSocket = !object.ReferenceEquals(tacceptSocket.LocalAddress, NotIPSocket);
+                        var localIpEndPoint = tacceptSocket.LocalEndPoint as IPEndPoint;
 
                         // Store the last LocalAddress on the tacceptSocket so we might reuse it instead
                         // of allocating a new one for the same address.
                         IPEndPointStruct localAddress = default(IPEndPointStruct);
                         IPEndPointStruct remoteAddress = default(IPEndPointStruct);
-                        if (ipSocket && tsocket.TryGetLocalIPAddress(out localAddress, tacceptSocket.LocalAddress))
+                        if (localIpEndPoint != null && tsocket.TryGetLocalIPAddress(out localAddress, localIpEndPoint.Address))
                         {
-                            tsocket.LocalAddress = localAddress.Address;
-                            tsocket.LocalPort = localAddress.Port;
+                            tsocket.LocalEndPoint = new IPEndPoint(localAddress.Address, localAddress.Port);
+
                             if (tsocket.TryGetPeerIPAddress(out remoteAddress))
                             {
-                                tsocket.RemoteAddress = remoteAddress.Address;
-                                tsocket.RemotePort = remoteAddress.Port;
+                                tsocket.RemoteEndPoint = new IPEndPoint(remoteAddress.Address, remoteAddress.Port);
                             }
                         }
                         else
                         {
                             // This is not an IP socket.
-                            tacceptSocket.LocalAddress = NotIPSocket;
-                            ipSocket = false;
+                            // REVIEW: Should LocalEndPoint be null instead? Some other EndPoint type?
+                            tacceptSocket.LocalEndPoint = new IPEndPoint(NotIPSocket, 0);
                         }
 
-                        if (ipSocket)
+                        if (localIpEndPoint != null)
                         {
                             tsocket.SetSocketOption(SOL_TCP, TCP_NODELAY, 1);
                         }
@@ -646,7 +676,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         return 0;
                     }
 
-                    tsocket.MiddlewareTask = _connectionDispatcher.OnConnection(tsocket);
+
+                    bool accepted = _acceptQueue.Writer.TryWrite(tsocket);
+                    Debug.Assert(accepted, "The connection was not written to the channel!");
 
                     lock (_sockets)
                     {
@@ -779,6 +811,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             public unsafe void Dispose()
             {
+                // TODO: This feels wrong.
+                AbortQueuedConnectionAsync().GetAwaiter().GetResult();
+
                 _epoll?.Dispose();
                 _pipeEnds.Dispose();
                 MemoryPool?.Dispose();

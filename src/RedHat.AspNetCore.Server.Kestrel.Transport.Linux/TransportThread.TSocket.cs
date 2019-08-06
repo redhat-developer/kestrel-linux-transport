@@ -4,7 +4,6 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Threading.Tasks;
 using Tmds.Linux;
 using Microsoft.AspNetCore.Connections;
 using static Tmds.Linux.LibC;
@@ -59,8 +58,14 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private const int EventControlRegistered = (int)SocketFlags.EventControlRegistered;
             public const int EventControlPending = (int)SocketFlags.EventControlPending;
 
-            private static readonly int MaxBufferSize = KestrelMemoryPool.MinimumSegmentSize;
+            // The MaxBufferSize value is copied from Kestrel's SlabMemoryPool._blockSize.
+            private static readonly int MaxBufferSize = 4096;
             private static readonly int BufferMargin = MaxBufferSize / 4;
+
+            // Copied from LibuvTransportOptions.MaxReadBufferSize
+            private static readonly int PauseInputWriterThreashold = 1024 * 1024;
+            // Copied from LibuvTransportOptions.MaxWriteBufferSize
+            private static readonly int PauseOutputWriterThreashold = 64 * 1024;
 
             public readonly object         Gate = new object();
             private readonly ThreadContext _threadContext;
@@ -78,7 +83,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private int                   _zeropCopyState;
             private SequencePosition      _zeroCopyEnd;
             private int                   _readState = CheckAvailable;
-            public  Task                   MiddlewareTask;
 
             public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
             {
@@ -93,7 +97,19 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     _sendMemoryHandles = new MemoryHandle[MaxIOVectorSendLength];
                 }
+
+                var inputOptions = new PipeOptions(MemoryPool, PipeScheduler.ThreadPool, PipeScheduler.Inline, PauseInputWriterThreashold, PauseInputWriterThreashold / 2, useSynchronizationContext: false);
+                var outputOptions = new PipeOptions(MemoryPool, PipeScheduler.Inline, PipeScheduler.ThreadPool, PauseOutputWriterThreashold, PauseOutputWriterThreashold / 2, useSynchronizationContext: false);
+
+                var pair = DuplexPipe.CreateConnectionPair(inputOptions, outputOptions);
+
+                Transport = pair.Transport;
+                Application = pair.Application;
             }
+
+            public PipeWriter Input => Application.Output;
+
+            public PipeReader Output => Application.Input;
 
             public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
 
@@ -416,7 +432,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private async void CleanupSocketEnd()
+            private void CleanupSocketEnd()
             {
                 lock (Gate)
                 {
@@ -438,8 +454,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 // Inform the application.
                 ThreadPool.UnsafeQueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
 
+                // TODO: Determine if CleanupSocketEnd() is already called late enough so that there is no need to await anything.
+
                 // Only called after connection middleware is complete which means the ConnectionClosed token has fired.
-                await MiddlewareTask;
+                //await MiddlewareTask;
                 _connectionClosedTokenSource.Dispose();
 
                 if (lastSocket)
@@ -784,10 +802,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             public override MemoryPool<byte> MemoryPool => _threadContext.MemoryPool;
 
-            public override PipeScheduler InputWriterScheduler => PipeScheduler.Inline;
-
-            public override PipeScheduler OutputReaderScheduler => PipeScheduler.Inline;
-
             public PosixResult TryReceiveSocket(out int socket, bool blocking)
                 => SocketInterop.ReceiveSocket(Fd, out socket, blocking);
 
@@ -883,6 +897,44 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
                 => SocketInterop.TryGetPeerIPAddress(Fd, out ep);
+
+            // Copied from Kestrel's Libuv Transport
+            internal class DuplexPipe : IDuplexPipe
+            {
+                public DuplexPipe(PipeReader reader, PipeWriter writer)
+                {
+                    Input = reader;
+                    Output = writer;
+                }
+
+                public PipeReader Input { get; }
+
+                public PipeWriter Output { get; }
+
+                public static DuplexPipePair CreateConnectionPair(PipeOptions inputOptions, PipeOptions outputOptions)
+                {
+                    var input = new Pipe(inputOptions);
+                    var output = new Pipe(outputOptions);
+
+                    var transportToApplication = new DuplexPipe(output.Reader, input.Writer);
+                    var applicationToTransport = new DuplexPipe(input.Reader, output.Writer);
+
+                    return new DuplexPipePair(applicationToTransport, transportToApplication);
+                }
+
+                // This class exists to work around issues with value tuple on .NET Framework
+                public readonly struct DuplexPipePair
+                {
+                    public IDuplexPipe Transport { get; }
+                    public IDuplexPipe Application { get; }
+
+                    public DuplexPipePair(IDuplexPipe transport, IDuplexPipe application)
+                    {
+                        Transport = transport;
+                        Application = application;
+                    }
+                }
+            }
         }
     }
 }
