@@ -1,11 +1,14 @@
 using System;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    public class LinuxTransportFactory : ITransportFactory
+    public class LinuxTransportFactory : IConnectionListenerFactory
     {
         private LinuxTransportOptions _options;
         private ILoggerFactory _loggerFactory;
@@ -24,9 +27,12 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             _loggerFactory = loggerFactory;
         }
 
-        public ITransport Create(IEndPointInformation IEndPointInformation, IConnectionDispatcher handler)
+
+        public async ValueTask<IConnectionListener> BindAsync(EndPoint endpoint, CancellationToken cancellationToken = default)
         {
-            return new Transport(IEndPointInformation, handler, _options, _loggerFactory);
+            var transport = new Transport(endpoint, _options, _loggerFactory);
+            await transport.BindAsync();
+            return transport;
         }
     }
 }

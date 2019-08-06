@@ -11,7 +11,7 @@ using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    internal class Transport : IConnectionListenerFactory
+    internal class Transport : IConnectionListener
     {
         private enum State
         {
@@ -34,7 +34,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         private readonly object _gate = new object();
         private ITransportActionHandler[] _threads;
 
-        public Transport(EndPoint ipEndPointInformation, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
+        public Transport(EndPoint endPoint, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
             if (transportOptions == null)
             {
@@ -44,19 +44,19 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new ArgumentException(nameof(loggerFactory));
             }
-            if (ipEndPointInformation == null)
+            if (endPoint == null)
             {
-                throw new ArgumentException(nameof(ipEndPointInformation));
+                throw new ArgumentException(nameof(endPoint));
             }
 
-            _endPoint = ipEndPointInformation;
+            _endPoint = endPoint;
             _transportOptions = transportOptions;
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<Transport>();
             _threads = Array.Empty<TransportThread>();
         }
 
-        public async ValueTask<IConnectionListener> BindAsync()
+        public async Task BindAsync()
         {
             AcceptThread acceptThread;
             TransportThread[] transportThreads;
@@ -150,7 +150,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(ipEndPoint, _connectionDispatcher, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
+                var thread = new TransportThread(ipEndPoint, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
                 threads[i] = thread;
             }
             return threads;
@@ -258,6 +258,52 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         private void ThrowInvalidOperation()
         {
             throw new InvalidOperationException($"Invalid operation: {_state}");
+        }
+
+        private async IAsyncEnumerator<TSocket> AcceptConnections()
+        {
+            var slots = new Task<(LibuvConnection, int)>[_listeners.Count];
+            // This is the task we'll put in the slot when each listening completes. It'll prevent
+            // us from having to shrink the array. We'll just loop while there are active slots.
+            var incompleteTask = new TaskCompletionSource<(LibuvConnection, int)>().Task;
+
+            var remainingSlots = slots.Length;
+
+            // Issue parallel accepts on all listeners
+            for (int i = 0; i < remainingSlots; i++)
+            {
+                slots[i] = AcceptAsync(_listeners[i], i);
+            }
+
+            while (remainingSlots > 0)
+            {
+                // Calling GetAwaiter().GetResult() is safe because we know the task is completed
+                (var connection, var slot) = (await Task.WhenAny(slots)).GetAwaiter().GetResult();
+
+                // If the connection is null then the listener was closed
+                if (connection == null)
+                {
+                    remainingSlots--;
+                    slots[slot] = incompleteTask;
+                }
+                else
+                {
+                    // Fill that slot with another accept and yield the connection
+                    slots[slot] = AcceptAsync(_listeners[slot], slot);
+
+                    yield return connection;
+                }
+            }
+
+            static async Task<(LibuvConnection, int)> AcceptAsync(ListenerContext listener, int slot)
+            {
+                return (await listener.AcceptAsync(), slot);
+            }
+        }
+
+        private static async Task<bool> WaitAsync(Task task, TimeSpan timeout)
+        {
+            return await Task.WhenAny(task, Task.Delay(timeout)).ConfigureAwait(false) == task;
         }
     }
 }

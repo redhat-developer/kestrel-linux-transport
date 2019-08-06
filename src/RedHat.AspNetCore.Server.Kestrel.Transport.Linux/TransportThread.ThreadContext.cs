@@ -1001,7 +1001,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             internal static MemoryPool<byte> CreateMemoryPool()
             {
-                return KestrelMemoryPool.Create();
+                return new SlabMemoryPool();
             }
 
             private struct ScheduledSend

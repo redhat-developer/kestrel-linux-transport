@@ -58,14 +58,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private const int EventControlRegistered = (int)SocketFlags.EventControlRegistered;
             public const int EventControlPending = (int)SocketFlags.EventControlPending;
 
-            // The MaxBufferSize value is copied from Kestrel's SlabMemoryPool._blockSize.
-            private static readonly int MaxBufferSize = 4096;
-            private static readonly int BufferMargin = MaxBufferSize / 4;
-
             // Copied from LibuvTransportOptions.MaxReadBufferSize
             private static readonly int PauseInputWriterThreashold = 1024 * 1024;
             // Copied from LibuvTransportOptions.MaxWriteBufferSize
             private static readonly int PauseOutputWriterThreashold = 64 * 1024;
+
+            private readonly int MaxBufferSize;
+            private readonly int BufferMargin;
 
             public readonly object         Gate = new object();
             private readonly ThreadContext _threadContext;
@@ -87,6 +86,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
             {
                 _threadContext = threadContext;
+
+                MaxBufferSize = MemoryPool.MaxBufferSize;
+                BufferMargin = MaxBufferSize / 4;
+
                 Fd = fd;
                 _flags = flags;
                 _onFlushedToApp = new Action(OnFlushedToApp);
