@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections;
 using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
