@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <AspNetCoreVersion>3.0.0-preview*</AspNetCoreVersion>
     <XunitPackageVersion>2.3.1</XunitPackageVersion>
     <MicrosoftNETTestSdkPackageVersion>15.6.0</MicrosoftNETTestSdkPackageVersion>
     <XunitRunnerVisualStudioPackageVersion>2.4.0-beta.1.build3945</XunitRunnerVisualStudioPackageVersion>

@@ -7,6 +7,7 @@ using System.Threading;
 using Tmds.Linux;
 using Microsoft.AspNetCore.Connections;
 using static Tmds.Linux.LibC;
+using System.Threading.Tasks;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -73,6 +74,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly Action       _onReadFromApp;
             private readonly MemoryHandle[] _sendMemoryHandles;
             private readonly CancellationTokenSource _connectionClosedTokenSource;
+            private readonly TaskCompletionSource<object> _waitForConnectionClosedTcs;
 
             public int                     ZeroCopyThreshold;
 
@@ -96,6 +98,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 _onReadFromApp = new Action(OnReadFromApp);
                 _connectionClosedTokenSource = new CancellationTokenSource();
                 ConnectionClosed = _connectionClosedTokenSource.Token;
+                _waitForConnectionClosedTcs = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+
                 if (!IsDeferSend)
                 {
                     _sendMemoryHandles = new MemoryHandle[MaxIOVectorSendLength];
@@ -136,6 +140,17 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public override void Abort()
             {
                 CancelWriteToSocket();
+            }
+
+            public override async ValueTask DisposeAsync()
+            {
+                Transport.Input.Complete();
+                Transport.Output.Complete();
+
+                CompleteOutput(null);
+
+                await _waitForConnectionClosedTcs.Task;
+                _connectionClosedTokenSource.Dispose();
             }
 
             private void CancelWriteToSocket()
@@ -439,6 +454,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 lock (Gate)
                 {
+                    if (HasFlag(SocketFlags.CloseEnd))
+                    {
+                        return;
+                    }
+
                     _flags = _flags + (int)SocketFlags.CloseEnd;
                     if (!HasFlag(SocketFlags.BothClosed))
                     {
@@ -457,12 +477,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 // Inform the application.
                 ThreadPool.UnsafeQueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
 
-                // TODO: Determine if CleanupSocketEnd() is already called late enough so that there is no need to await anything.
-
-                // Only called after connection middleware is complete which means the ConnectionClosed token has fired.
-                //await MiddlewareTask;
-                _connectionClosedTokenSource.Dispose();
-
                 if (lastSocket)
                 {
                     _threadContext.StopThread();
@@ -472,6 +486,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private void CancelConnectionClosedToken()
             {
                 _connectionClosedTokenSource.Cancel();
+                _waitForConnectionClosedTcs.SetResult(null);
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
