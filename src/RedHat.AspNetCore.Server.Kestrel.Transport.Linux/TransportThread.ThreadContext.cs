@@ -676,7 +676,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         return 0;
                     }
 
-
                     bool accepted = _acceptQueue.Writer.TryWrite(tsocket);
                     Debug.Assert(accepted, "The connection was not written to the channel!");
 

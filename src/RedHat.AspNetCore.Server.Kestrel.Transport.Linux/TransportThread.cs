@@ -214,25 +214,23 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public async ValueTask<ConnectionContext> AcceptAsync(CancellationToken cancellationToken = default)
         {
-            var startingTask = Task.CompletedTask;
+            ValueTask<TSocket> acceptTask;
 
             lock (_gate)
             {
-                if (_state == TransportThreadState.Starting)
+                if (_state > TransportThreadState.Started)
                 {
-                    startingTask = Task.CompletedTask;
-                    //return AcceptAsyncAwaited(_stateChangeCompletion.Task, cancellationToken);
+                    return null;
                 }
                 else if (_state != TransportThreadState.Started)
                 {
                     ThrowInvalidState();
                 }
 
+                acceptTask = _threadContext.AcceptAsync(cancellationToken);
             }
 
-            await startingTask;
-
-            return await _threadContext.AcceptAsync(cancellationToken);
+            return await acceptTask;
         }
     }
 }
