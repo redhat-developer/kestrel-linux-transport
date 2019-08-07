@@ -2,20 +2,20 @@ using System;
 using System.Buffers;
 using System.IO.Pipelines;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Connections.Features;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Console;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
 using static Tmds.Linux.LibC;
+using Socket = RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Socket;
 
 namespace Tests
 {
-    public delegate Task TestServerConnectionDispatcher(PipeReader input, PipeWriter output, TransportConnection connection);
+    public delegate Task TestServerConnectionDispatcher(PipeReader input, PipeWriter output, ConnectionContext connection);
 
     public class TestServerOptions
     {
@@ -41,22 +41,13 @@ namespace Tests
         public PipeWriter Output { get; }
     }
 
-    class TestServer : IConnectionDispatcher, IDisposable
+    class TestServer : IDisposable
     {
         private Transport _transport;
         private IPEndPoint _serverAddress;
         private string _unixSocketPath;
         private TestServerConnectionDispatcher _connectionDispatcher;
-
-        private class EndPointInfo : IEndPointInformation
-        {
-            public ListenType Type { get; set; }
-            public IPEndPoint IPEndPoint { get; set; }
-            public string SocketPath { get; set; }
-            public ulong FileHandle { get => 0; }
-            public FileHandleType HandleType { get => FileHandleType.Auto; set { } }
-            public bool NoDelay { get => true; }
-        }
+        private Task _acceptLoopTask;
 
         public TestServer(TestServerOptions options = null)
         {
@@ -70,58 +61,61 @@ namespace Tests
                 AioSend = options.AioSend
             };
             var loggerFactory = new LoggerFactory();
-            IEndPointInformation endPoint = null;
+            EndPoint endPoint = null;
             if (options.UnixSocketPath != null)
             {
                 _unixSocketPath = options.UnixSocketPath;
-                endPoint = new EndPointInfo
-                {
-                    Type = ListenType.SocketPath,
-                    SocketPath = _unixSocketPath
-                };
+                endPoint = new UnixDomainSocketEndPoint(_unixSocketPath);
             }
             else
             {
                 _serverAddress = options.IPEndPoint ?? new IPEndPoint(IPAddress.Loopback, 0);
-                endPoint = new EndPointInfo
-                {
-                    Type = ListenType.IPEndPoint,
-                    IPEndPoint = _serverAddress
-                };
+                endPoint = _serverAddress;
             }
-            _transport = new Transport(endPoint, this, transportOptions, loggerFactory);
+            _transport = new Transport(endPoint, transportOptions, loggerFactory);
         }
 
         public TestServer(TestServerConnectionDispatcher connectionDispatcher) :
             this(new TestServerOptions() { ConnectionDispatcher = connectionDispatcher })
         {}
 
-        public Task BindAsync()
+        public async Task BindAsync()
         {
-            return _transport.BindAsync();
+            await _transport.BindAsync();
+
+            _acceptLoopTask = AcceptLoopAsync();
         }
 
-        public Task UnbindAsync()
+        public async Task UnbindAsync()
         {
-            return _transport.UnbindAsync();
+            await _transport.UnbindAsync();
+            await _acceptLoopTask;
         }
 
-        public Task StopAsync()
+        public ValueTask StopAsync()
         {
-            return _transport.StopAsync();
+            return _transport.DisposeAsync();
         }
 
-        public async Task OnConnection(TransportConnection connection)
+        private async Task AcceptLoopAsync()
         {
-            var memoryPool = connection.MemoryPool;
-            var input = new Pipe(GetInputPipeOptions(memoryPool, connection.InputWriterScheduler));
-            var output = new Pipe(GetOutputPipeOptions(memoryPool, connection.OutputReaderScheduler));
+            while (true)
+            {
+                var connection = await _transport.AcceptAsync();
 
-            connection.Transport = new DuplexPipe(input.Reader, output.Writer);
-            connection.Application = new DuplexPipe(output.Reader, input.Writer);
+                if (connection == null)
+                {
+                    break;
+                }
 
+                await OnConnection(connection);
+            }
+        }
+
+        private async Task OnConnection(ConnectionContext connection)
+        {
             // Handle the connection
-            await _connectionDispatcher(input.Reader, output.Writer, connection);
+            await _connectionDispatcher(connection.Transport.Input, connection.Transport.Output, connection);
 
             // Wait for the transport to close
             await CancellationTokenAsTask(connection.ConnectionClosed);
@@ -165,12 +159,12 @@ namespace Tests
 
         public void Dispose()
         {
-            Task stopTask = _transport.StopAsync();
+            ValueTask stopTask = _transport.DisposeAsync();
             // Tests must have called StopAsync already.
             Assert.True(stopTask.IsCompleted);
         }
 
-        public static async Task Echo(PipeReader input, PipeWriter output, TransportConnection connection)
+        public static async Task Echo(PipeReader input, PipeWriter output, ConnectionContext connection)
         {
             try
             {

@@ -7,7 +7,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
 using static Tmds.Linux.LibC;
