@@ -980,6 +980,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     acceptSockets[i].Close(); // will close (no concurrent users)
                 }
                 acceptSockets.Clear();
+                _acceptQueue.Writer.TryComplete();
                 CompleteStateChange(TransportThreadState.AcceptClosed);
                 if (lastSocket)
                 {
