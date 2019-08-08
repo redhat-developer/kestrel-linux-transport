@@ -36,7 +36,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly Channel<TSocket> _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
             {
                 SingleReader = true,
-                SingleWriter = true
+                SingleWriter = true,
             });
 
             private readonly int _epollFd;

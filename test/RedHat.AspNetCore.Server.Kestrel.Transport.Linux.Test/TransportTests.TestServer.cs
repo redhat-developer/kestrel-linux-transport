@@ -108,7 +108,7 @@ namespace Tests
                     break;
                 }
 
-                await OnConnection(connection);
+                _ = OnConnection(connection);
             }
         }
 
@@ -134,28 +134,6 @@ namespace Tests
             token.Register(state => ((TaskCompletionSource<object>)state).SetResult(null), tcs);
             return tcs.Task;
         }
-
-        // copied from Kestrel
-        private const long _maxRequestBufferSize = 1024 * 1024;
-        private const long _maxResponseBufferSize = 64 * 1024;
-
-        private PipeOptions GetInputPipeOptions(MemoryPool<byte> memoryPool, PipeScheduler writerScheduler) => new PipeOptions
-        (
-            pool: memoryPool,
-            readerScheduler: PipeScheduler.Inline,
-            writerScheduler: writerScheduler,
-            pauseWriterThreshold: _maxRequestBufferSize,
-            resumeWriterThreshold: _maxRequestBufferSize
-        );
-
-        private PipeOptions GetOutputPipeOptions(MemoryPool<byte> memoryPool, PipeScheduler readerScheduler) => new PipeOptions
-        (
-            pool: memoryPool,
-            readerScheduler: readerScheduler,
-            writerScheduler: PipeScheduler.Inline,
-            pauseWriterThreshold: _maxResponseBufferSize,
-            resumeWriterThreshold: _maxResponseBufferSize
-        );
 
         public void Dispose()
         {
