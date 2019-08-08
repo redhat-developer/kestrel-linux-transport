@@ -470,7 +470,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _logger.LogDebug($"Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
 
                     CompleteStateChange(TransportThreadState.Stopped);
-
                 }
                 catch (Exception ex)
                 {
