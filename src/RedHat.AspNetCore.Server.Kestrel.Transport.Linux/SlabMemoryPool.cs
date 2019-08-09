@@ -9,6 +9,7 @@ using System.Threading;
 
 namespace System.Buffers
 {
+    // Copied from https://github.com/aspnet/AspNetCore/tree/e0e9096af526448cb1a02f97e60efd8567b7ba35
     /// <summary>
     /// Used to allocate and distribute re-usable blocks of memory.
     /// </summary>

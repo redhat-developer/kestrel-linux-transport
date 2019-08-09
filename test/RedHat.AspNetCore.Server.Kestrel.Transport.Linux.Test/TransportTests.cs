@@ -78,9 +78,10 @@ namespace Tests
         public async Task StopDisconnectsClient()
         {
             var outputTcs = new TaskCompletionSource<PipeWriter>();
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
+            TestServerConnectionDispatcher connectionDispatcher = (input, output, _) =>
             {
                 outputTcs.SetResult(output);
+                return Task.CompletedTask;
             };
 
             using (var testServer = CreateTestServer(connectionDispatcher))

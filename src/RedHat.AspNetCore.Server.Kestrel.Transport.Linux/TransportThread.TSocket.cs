@@ -921,7 +921,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe PosixResult TryGetPeerIPAddress(out IPEndPointStruct ep)
                 => SocketInterop.TryGetPeerIPAddress(Fd, out ep);
 
-            // Copied from Kestrel's Libuv Transport
             internal class DuplexPipe : IDuplexPipe
             {
                 public DuplexPipe(PipeReader reader, PipeWriter writer)

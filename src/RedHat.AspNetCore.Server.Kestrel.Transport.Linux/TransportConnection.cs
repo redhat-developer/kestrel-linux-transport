@@ -1,6 +1,4 @@
-﻿// Copied from https://github.com/aspnet/AspNetCore/tree/e0e9096af526448cb1a02f97e60efd8567b7ba35
-
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
@@ -13,6 +11,7 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
+    // Copied from https://github.com/aspnet/AspNetCore/tree/e0e9096af526448cb1a02f97e60efd8567b7ba35
     internal abstract partial class TransportConnection : ConnectionContext
     {
         private IDictionary<object, object> _items;

@@ -83,7 +83,8 @@ namespace Tests
         {
             await _transport.BindAsync();
 
-            _acceptLoopTask = AcceptLoopAsync();
+            // Make sure continuations don't need to post to xunit's MaxConcurrencySyncContext.
+            _acceptLoopTask = Task.Run(AcceptLoopAsync);
         }
 
         public async Task UnbindAsync()
