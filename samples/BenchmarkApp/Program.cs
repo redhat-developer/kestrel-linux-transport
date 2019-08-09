@@ -38,7 +38,10 @@ namespace SampleApp
         public static void Main(string[] args)
         {
             var hostBuilder = new WebHostBuilder()
-                .UseKestrel()
+                .UseKestrel(options =>
+                {
+                    options.AllowSynchronousIO = true;
+                })
                 .UseLinuxTransport()
                 .UseStartup<Startup>();
 
