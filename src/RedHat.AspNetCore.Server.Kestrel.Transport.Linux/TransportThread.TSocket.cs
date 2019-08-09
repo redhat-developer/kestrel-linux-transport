@@ -4,10 +4,10 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Tmds.Linux;
-using Microsoft.AspNetCore.Connections;
-using static Tmds.Linux.LibC;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Connections;
+using Tmds.Linux;
+using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
