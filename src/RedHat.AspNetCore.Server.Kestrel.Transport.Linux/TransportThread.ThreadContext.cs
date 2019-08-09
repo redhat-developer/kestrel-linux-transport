@@ -32,14 +32,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private const byte PipeCloseAccept = 3;
             private const int MemoryAlignment = 8;
 
-            // Single reader, single writer queue since all writes happen from the TransportThread and reads happen sequentially
-            private readonly Channel<TSocket> _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = true,
-                AllowSynchronousContinuations = true,
-            });
-
             private readonly int _epollFd;
             private readonly EPoll _epoll;
 
@@ -49,6 +41,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             // key is the file descriptor
             private readonly Dictionary<int, TSocket> _sockets;
             private readonly List<TSocket> _acceptSockets;
+            private readonly Channel<TSocket> _acceptQueue;
+
 
             private PipeEndPair _pipeEnds;
             private int _epollState;
@@ -119,6 +113,14 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     AioInterop.IoSetup(EventBufferLength, &ctx).ThrowOnError();
                     _aioContext = ctx;
                 }
+
+                // Single reader, single writer queue since all writes happen from the TransportThread and reads happen sequentially
+                _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
+                {
+                    SingleReader = true,
+                    SingleWriter = true,
+                    AllowSynchronousContinuations = _transportOptions.ApplicationSchedulingMode == PipeScheduler.Inline,
+                });
             }
 
             public async ValueTask<TSocket> AcceptAsync(CancellationToken cancellationToken = default)
@@ -812,7 +814,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             public unsafe void Dispose()
             {
-                // TODO: This feels wrong.
                 AbortQueuedConnectionAsync().GetAwaiter().GetResult();
 
                 _epoll?.Dispose();

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.IO.Pipelines;
 using System.Linq;
 using System.Net;
 using System.Runtime;
@@ -138,11 +139,7 @@ namespace SampleApp
             }
 
             var hostBuilder = new WebHostBuilder()
-                .UseKestrel(options =>
-                {
-                    // TODO: Move to transport options
-                    //options.ApplicationSchedulingMode = tt ? SchedulingMode.Inline : SchedulingMode.ThreadPool;
-                })
+                .UseKestrel()
                 .UseStartup<Startup>();
 
             if (libuv)
@@ -158,6 +155,7 @@ namespace SampleApp
                 hostBuilder = hostBuilder.UseLinuxTransport(options =>
                 {
                     options.ThreadCount = threadCount;
+                    options.ApplicationSchedulingMode = tt ? PipeScheduler.Inline : PipeScheduler.ThreadPool;
                     //options.SetThreadAffinity = ta;
                     //options.ReceiveOnIncomingCpu = ic;
                     options.DeferAccept = da;

@@ -26,6 +26,7 @@ namespace Tests
         public IPEndPoint IPEndPoint { get; set; }
         public bool AioSend { get; set; } = false;
         public bool AioReceive { get; set; } = false;
+        public PipeScheduler ApplicationSchedulingMode { get; set; } = PipeScheduler.ThreadPool;
     }
 
     internal class DuplexPipe : IDuplexPipe
@@ -58,7 +59,8 @@ namespace Tests
                 ThreadCount = options.ThreadCount,
                 DeferAccept = options.DeferAccept,
                 AioReceive = options.AioReceive,
-                AioSend = options.AioSend
+                AioSend = options.AioSend,
+                ApplicationSchedulingMode = options.ApplicationSchedulingMode,
             };
             var loggerFactory = new LoggerFactory();
             EndPoint endPoint = null;

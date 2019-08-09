@@ -369,6 +369,7 @@ namespace Tests
             using (var testServer = CreateTestServer(options =>
                                         { options.ConnectionDispatcher = connectionDispatcher;
                                           options.ThreadCount = 2;
+                                          options.ApplicationSchedulingMode = PipeScheduler.Inline;
                                           options.UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}"; }))
             {
                 await testServer.BindAsync();
