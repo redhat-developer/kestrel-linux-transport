@@ -37,6 +37,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 SingleReader = true,
                 SingleWriter = true,
+                AllowSynchronousContinuations = true,
             });
 
             private readonly int _epollFd;
@@ -643,12 +644,13 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         };
 
                         var localIpEndPoint = tacceptSocket.LocalEndPoint as IPEndPoint;
+                        bool ipSocket = !object.ReferenceEquals(localIpEndPoint?.Address, NotIPSocket);
 
                         // Store the last LocalAddress on the tacceptSocket so we might reuse it instead
                         // of allocating a new one for the same address.
                         IPEndPointStruct localAddress = default(IPEndPointStruct);
                         IPEndPointStruct remoteAddress = default(IPEndPointStruct);
-                        if (localIpEndPoint != null && tsocket.TryGetLocalIPAddress(out localAddress, localIpEndPoint.Address))
+                        if (ipSocket && tsocket.TryGetLocalIPAddress(out localAddress, localIpEndPoint?.Address))
                         {
                             tsocket.LocalEndPoint = new IPEndPoint(localAddress.Address, localAddress.Port);
 
@@ -662,9 +664,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                             // This is not an IP socket.
                             // REVIEW: Should LocalEndPoint be null instead? Some other EndPoint type?
                             tacceptSocket.LocalEndPoint = new IPEndPoint(NotIPSocket, 0);
+                            ipSocket = false;
                         }
 
-                        if (localIpEndPoint != null)
+                        if (ipSocket)
                         {
                             tsocket.SetSocketOption(SOL_TCP, TCP_NODELAY, 1);
                         }

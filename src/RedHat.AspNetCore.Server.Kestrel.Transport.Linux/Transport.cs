@@ -72,9 +72,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                 switch (EndPoint)
                 {
-                    case IPEndPoint ipEndPoint: 
+                    case IPEndPoint ipEndPoint:
                         acceptThread = null;
-                        _transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
+                        _transportThreads = CreateTransportThreads(ipEndPoint, acceptThread: null);
                         break;
                     case UnixDomainSocketEndPoint unixDomainSocketEndPoint:
                         var socketPath = unixDomainSocketEndPoint.ToString();

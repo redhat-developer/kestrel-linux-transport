@@ -96,7 +96,7 @@ namespace Tests
                     clientOutput.Complete(new ConnectionAbortedException());
                     await testServer.StopAsync();
 
-                    // receive returns EOF                
+                    // receive returns EOF
                     byte[] receiveBuffer = new byte[10];
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                     Assert.Equal(0, received);
@@ -108,7 +108,7 @@ namespace Tests
                         {
                             byte[] sendBuffer = new byte[] { 1, 2, 3 };
                             client.Send(new ArraySegment<byte>(sendBuffer));
-                        }                    
+                        }
                     });
                     Assert.Equal(EPIPE, exception.HResult);
                 }
