@@ -452,13 +452,12 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void CleanupSocketEnd()
             {
-                var hasCanceledConnectionClosedToken = false;
-
                 lock (Gate)
                 {
-                    if (HasFlag(SocketFlags.CloseEnd))
+                    if (HasFlag(SocketFlags.BothClosed))
                     {
-                        hasCanceledConnectionClosedToken = true;
+                        // The socket has already been cleaned up.
+                        return;
                     }
 
                     _flags = _flags + (int)SocketFlags.CloseEnd;
@@ -476,11 +475,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 // so we are sure this is the last use of the Socket.
                 Close();
 
-                if (!hasCanceledConnectionClosedToken)
-                {
-                    // Inform the application.
-                    ThreadPool.UnsafeQueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
-                }
+                // Inform the application.
+                ThreadPool.UnsafeQueueUserWorkItem(state => ((TSocket)state).CancelConnectionClosedToken(), this);
 
                 if (lastSocket)
                 {

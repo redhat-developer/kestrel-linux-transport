@@ -139,7 +139,10 @@ namespace SampleApp
             }
 
             var hostBuilder = new WebHostBuilder()
-                .UseKestrel()
+                .UseKestrel(options =>
+                {
+                    options.AllowSynchronousIO = true;
+                })
                 .UseStartup<Startup>();
 
             if (libuv)
