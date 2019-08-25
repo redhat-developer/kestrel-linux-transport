@@ -60,12 +60,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public const int EventControlPending = (int)SocketFlags.EventControlPending;
 
             // Copied from LibuvTransportOptions.MaxReadBufferSize
-            private static readonly int PauseInputWriterThreashold = 1024 * 1024;
+            private static readonly int PauseInputWriterThreshold = 1024 * 1024;
             // Copied from LibuvTransportOptions.MaxWriteBufferSize
-            private static readonly int PauseOutputWriterThreashold = 64 * 1024;
-
-            private readonly int MaxBufferSize;
-            private readonly int BufferMargin;
+            private static readonly int PauseOutputWriterThreshold = 64 * 1024;
 
             public readonly object         Gate = new object();
             private readonly ThreadContext _threadContext;
@@ -85,12 +82,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private SequencePosition      _zeroCopyEnd;
             private int                   _readState = CheckAvailable;
 
-            public TSocket(ThreadContext threadContext, int fd, SocketFlags flags)
+            public TSocket(ThreadContext threadContext, int fd, SocketFlags flags, LinuxTransportOptions options)
             {
                 _threadContext = threadContext;
-
-                MaxBufferSize = MemoryPool.MaxBufferSize;
-                BufferMargin = MaxBufferSize / 4;
 
                 Fd = fd;
                 _flags = flags;
@@ -105,8 +99,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _sendMemoryHandles = new MemoryHandle[MaxIOVectorSendLength];
                 }
 
-                var inputOptions = new PipeOptions(MemoryPool, PipeScheduler.ThreadPool, PipeScheduler.Inline, PauseInputWriterThreashold, PauseInputWriterThreashold / 2, useSynchronizationContext: false);
-                var outputOptions = new PipeOptions(MemoryPool, PipeScheduler.Inline, PipeScheduler.ThreadPool, PauseOutputWriterThreashold, PauseOutputWriterThreashold / 2, useSynchronizationContext: false);
+                var inputOptions = new PipeOptions(MemoryPool, options.ApplicationSchedulingMode, PipeScheduler.Inline, PauseInputWriterThreshold, PauseInputWriterThreshold / 2, useSynchronizationContext: false);
+                var outputOptions = new PipeOptions(MemoryPool, PipeScheduler.Inline, options.ApplicationSchedulingMode, PauseOutputWriterThreshold, PauseOutputWriterThreshold / 2, useSynchronizationContext: false);
 
                 var pair = DuplexPipe.CreateConnectionPair(inputOptions, outputOptions);
 
@@ -123,6 +117,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public bool IsDeferSend => HasFlag(SocketFlags.DeferSend);
 
             public SocketFlags Type => ((SocketFlags)_flags & SocketFlags.TypeMask);
+
+            private int MaxBufferSize => MemoryPool.MaxBufferSize;
+
+            private int BufferMargin => MaxBufferSize / 4;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private bool HasFlag(SocketFlags flag) => HasFlag(_flags, flag);
@@ -147,7 +145,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 Transport.Input.Complete();
                 Transport.Output.Complete();
 
-                CompleteOutput(null);
+                CancelReadFromSocket();
+                CancelWriteToSocket();
 
                 await _waitForConnectionClosedTcs.Task;
                 _connectionClosedTokenSource.Dispose();
@@ -454,12 +453,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 lock (Gate)
                 {
-                    if (HasFlag(SocketFlags.BothClosed))
-                    {
-                        // The socket has already been cleaned up.
-                        return;
-                    }
-
                     _flags = _flags + (int)SocketFlags.CloseEnd;
                     if (!HasFlag(SocketFlags.BothClosed))
                     {

@@ -114,6 +114,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
 
                 // Single reader, single writer queue since all writes happen from the TransportThread and reads happen sequentially
+                // This channel is unbounded which means there's nothing limiting the number of sockets we're accepting.
+                // This is similar to having an unbounded number of thread pool work items queued to invoke a ConnectionHandler
+                // which was the previous pattern, but now it's more explicit. However, it would be good to find a reasonable limit
+                // and start applying accept backpressure once the channel reaches that limit.
                 _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
                 {
                     SingleReader = true,
@@ -156,7 +160,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     SocketInterop.Socket(ipv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, blocking: false,
                         out acceptSocketFd).ThrowOnError();
 
-                    TSocket acceptSocket = new TSocket(this, acceptSocketFd, flags);
+                    TSocket acceptSocket = new TSocket(this, acceptSocketFd, flags, _transportOptions);
 
                     if (!ipv4)
                     {
@@ -236,7 +240,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         flags |= SocketFlags.TypePassFd;
                         int acceptSocketFd = _transportThread.AcceptThread.CreateReceiveSocket();
-                        acceptSocket = new TSocket(this, acceptSocketFd, flags);
+                        acceptSocket = new TSocket(this, acceptSocketFd, flags, _transportOptions);
                         acceptSocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
                     }
                     else
@@ -639,7 +643,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     try
                     {
                         SocketFlags flags = SocketFlags.TypeClient | (tacceptSocket.IsDeferSend ? SocketFlags.DeferSend : SocketFlags.None);
-                        tsocket = new TSocket(this, clientFd, flags)
+                        tsocket = new TSocket(this, clientFd, flags, _transportOptions)
                         {
                             ZeroCopyThreshold = tacceptSocket.ZeroCopyThreshold
                         };
