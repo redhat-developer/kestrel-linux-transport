@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\externals\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Tmds.LibC" Version="0.1.0" />
   </ItemGroup>
 

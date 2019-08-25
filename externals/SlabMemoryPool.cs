@@ -1,15 +1,12 @@
-﻿// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace System.Buffers
 {
-    // Copied from https://github.com/aspnet/AspNetCore/tree/e0e9096af526448cb1a02f97e60efd8567b7ba35
     /// <summary>
     /// Used to allocate and distribute re-usable blocks of memory.
     /// </summary>
@@ -209,171 +206,6 @@ namespace System.Buffers
                     GC.SuppressFinalize(block);
                 }
             }
-        }
-    }
-
-    /// <summary>
-    /// Block tracking object used by the byte buffer memory pool. A slab is a large allocation which is divided into smaller blocks. The
-    /// individual blocks are then treated as independent array segments.
-    /// </summary>
-    internal sealed class MemoryPoolBlock : IMemoryOwner<byte>
-    {
-        private readonly int _offset;
-        private readonly int _length;
-
-        /// <summary>
-        /// This object cannot be instantiated outside of the static Create method
-        /// </summary>
-        internal MemoryPoolBlock(SlabMemoryPool pool, MemoryPoolSlab slab, int offset, int length)
-        {
-            _offset = offset;
-            _length = length;
-
-            Pool = pool;
-            Slab = slab;
-
-            Memory = MemoryMarshal.CreateFromPinnedArray(slab.Array, _offset, _length);
-        }
-
-        /// <summary>
-        /// Back-reference to the memory pool which this block was allocated from. It may only be returned to this pool.
-        /// </summary>
-        public SlabMemoryPool Pool { get; }
-
-        /// <summary>
-        /// Back-reference to the slab from which this block was taken, or null if it is one-time-use memory.
-        /// </summary>
-        public MemoryPoolSlab Slab { get; }
-
-        public Memory<byte> Memory { get; }
-
-        ~MemoryPoolBlock()
-        {
-            Pool.RefreshBlock(Slab, _offset, _length);
-        }
-
-        public void Dispose()
-        {
-            Pool.Return(this);
-        }
-
-        public void Lease()
-        {
-        }
-    }
-
-    /// <summary>
-    /// Slab tracking object used by the byte buffer memory pool. A slab is a large allocation which is divided into smaller blocks. The
-    /// individual blocks are then treated as independent array segments.
-    /// </summary>
-    internal class MemoryPoolSlab : IDisposable
-    {
-        /// <summary>
-        /// This handle pins the managed array in memory until the slab is disposed. This prevents it from being
-        /// relocated and enables any subsections of the array to be used as native memory pointers to P/Invoked API calls.
-        /// </summary>
-        private GCHandle _gcHandle;
-        private bool _isDisposed;
-
-        public MemoryPoolSlab(byte[] data)
-        {
-            Array = data;
-            _gcHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
-            NativePointer = _gcHandle.AddrOfPinnedObject();
-        }
-
-        /// <summary>
-        /// True as long as the blocks from this slab are to be considered returnable to the pool. In order to shrink the
-        /// memory pool size an entire slab must be removed. That is done by (1) setting IsActive to false and removing the
-        /// slab from the pool's _slabs collection, (2) as each block currently in use is Return()ed to the pool it will
-        /// be allowed to be garbage collected rather than re-pooled, and (3) when all block tracking objects are garbage
-        /// collected and the slab is no longer references the slab will be garbage collected and the memory unpinned will
-        /// be unpinned by the slab's Dispose.
-        /// </summary>
-        public bool IsActive => !_isDisposed;
-
-        public IntPtr NativePointer { get; private set; }
-
-        public byte[] Array { get; private set; }
-
-        public static MemoryPoolSlab Create(int length)
-        {
-            // allocate and pin requested memory length
-            var array = new byte[length];
-
-            // allocate and return slab tracking object
-            return new MemoryPoolSlab(array);
-        }
-
-        protected void Dispose(bool disposing)
-        {
-            if (_isDisposed)
-            {
-                return;
-            }
-
-            _isDisposed = true;
-
-            Array = null;
-            NativePointer = IntPtr.Zero; ;
-
-            if (_gcHandle.IsAllocated)
-            {
-                _gcHandle.Free();
-            }
-        }
-
-        ~MemoryPoolSlab()
-        {
-            Dispose(false);
-        }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-    }
-
-    internal class MemoryPoolThrowHelper
-    {
-        public static void ThrowArgumentOutOfRangeException_BufferRequestTooLarge(int maxSize)
-        {
-            throw GetArgumentOutOfRangeException_BufferRequestTooLarge(maxSize);
-        }
-
-        public static void ThrowObjectDisposedException(ExceptionArgument argument)
-        {
-            throw GetObjectDisposedException(argument);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static ArgumentOutOfRangeException GetArgumentOutOfRangeException_BufferRequestTooLarge(int maxSize)
-        {
-            return new ArgumentOutOfRangeException(GetArgumentName(ExceptionArgument.size), $"Cannot allocate more than {maxSize} bytes in a single buffer");
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static ObjectDisposedException GetObjectDisposedException(ExceptionArgument argument)
-        {
-            return new ObjectDisposedException(GetArgumentName(argument));
-        }
-
-        private static string GetArgumentName(ExceptionArgument argument)
-        {
-            Debug.Assert(Enum.IsDefined(typeof(ExceptionArgument), argument), "The enum value is not defined, please check the ExceptionArgument Enum.");
-
-            return argument.ToString();
-        }
-
-        internal enum ExceptionArgument
-        {
-            size,
-            offset,
-            length,
-            MemoryPoolBlock,
-            MemoryPool
         }
     }
 }
