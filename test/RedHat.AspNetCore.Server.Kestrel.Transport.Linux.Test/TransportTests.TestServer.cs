@@ -122,6 +122,8 @@ namespace Tests
 
             // Wait for the transport to close
             await CancellationTokenAsTask(connection.ConnectionClosed);
+
+            await connection.DisposeAsync();
         }
 
         private static Task CancellationTokenAsTask(CancellationToken token)

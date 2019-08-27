@@ -135,6 +135,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 set => _flags = (SocketFlags)value;
             }
 
+            public override void Abort(ConnectionAbortedException abortReason)
+            {
+                CancelWriteToSocket();
+            }
+
             public override void Abort()
             {
                 CancelWriteToSocket();
@@ -145,8 +150,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 Transport.Input.Complete();
                 Transport.Output.Complete();
 
-                CancelReadFromSocket();
-                CancelWriteToSocket();
+                Abort();
 
                 await _waitForConnectionClosedTcs.Task;
                 _connectionClosedTokenSource.Dispose();
@@ -154,6 +158,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             private void CancelWriteToSocket()
             {
+                Output.CancelPendingRead();
+
                 bool completeWritable = false;
                 lock (Gate)
                 {

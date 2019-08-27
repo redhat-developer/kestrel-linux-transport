@@ -218,11 +218,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             lock (_gate)
             {
-                if (_state > TransportThreadState.Started)
+                if (_state > TransportThreadState.ClosingAccept)
                 {
                     return null;
                 }
-                else if (_state != TransportThreadState.Started)
+                else if (_state < TransportThreadState.Started)
                 {
                     ThrowInvalidState();
                 }
