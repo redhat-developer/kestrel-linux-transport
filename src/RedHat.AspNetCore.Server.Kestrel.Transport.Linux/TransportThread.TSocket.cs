@@ -135,13 +135,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 set => _flags = (SocketFlags)value;
             }
 
+            // TODO: Do something with the abortReason argument like logging it and complete the app input pipe with it.
             public override void Abort(ConnectionAbortedException abortReason)
             {
-                CancelWriteToSocket();
-            }
-
-            public override void Abort()
-            {
+                Output.CancelPendingRead();
                 CancelWriteToSocket();
             }
 
@@ -158,8 +155,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             private void CancelWriteToSocket()
             {
-                Output.CancelPendingRead();
-
                 bool completeWritable = false;
                 lock (Gate)
                 {

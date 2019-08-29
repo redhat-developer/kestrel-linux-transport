@@ -116,8 +116,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 // Single reader, single writer queue since all writes happen from the TransportThread and reads happen sequentially
                 // This channel is unbounded which means there's nothing limiting the number of sockets we're accepting.
                 // This is similar to having an unbounded number of thread pool work items queued to invoke a ConnectionHandler
-                // which was the previous pattern, but now it's more explicit. However, it would be good to find a reasonable limit
-                // and start applying accept backpressure once the channel reaches that limit.
+                // which was the previous pattern, but now it's more explicit.
+
+                // TODO: Find a reasonable limit and start applying accept backpressure once the channel reaches that limit.
                 _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
                 {
                     SingleReader = true,
