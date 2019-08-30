@@ -116,8 +116,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 set => _flags = (SocketFlags)value;
             }
 
-            public override void Abort()
+            public override void Abort(ConnectionAbortedException abortReason)
             {
+                Output.CancelPendingRead();
                 CancelWriteToSocket();
             }
 
