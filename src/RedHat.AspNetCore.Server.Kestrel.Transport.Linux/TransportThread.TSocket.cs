@@ -60,9 +60,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public const int EventControlPending = (int)SocketFlags.EventControlPending;
 
             // Copied from LibuvTransportOptions.MaxReadBufferSize
-            private static readonly int PauseInputWriterThreshold = 1024 * 1024;
+            private const int PauseInputWriterThreshold = 1024 * 1024;
             // Copied from LibuvTransportOptions.MaxWriteBufferSize
-            private static readonly int PauseOutputWriterThreshold = 64 * 1024;
+            private const int PauseOutputWriterThreshold = 64 * 1024;
 
             public readonly object         Gate = new object();
             private readonly ThreadContext _threadContext;
