@@ -7,7 +7,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 using Xunit;
 using static Tmds.Linux.LibC;
@@ -79,9 +78,10 @@ namespace Tests
         public async Task StopDisconnectsClient()
         {
             var outputTcs = new TaskCompletionSource<PipeWriter>();
-            TestServerConnectionDispatcher connectionDispatcher = async (input, output, _) =>
+            TestServerConnectionDispatcher connectionDispatcher = (input, output, _) =>
             {
                 outputTcs.SetResult(output);
+                return Task.CompletedTask;
             };
 
             using (var testServer = CreateTestServer(connectionDispatcher))
@@ -97,7 +97,7 @@ namespace Tests
                     clientOutput.Complete(new ConnectionAbortedException());
                     await testServer.StopAsync();
 
-                    // receive returns EOF                
+                    // receive returns EOF
                     byte[] receiveBuffer = new byte[10];
                     var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                     Assert.Equal(0, received);
@@ -109,7 +109,7 @@ namespace Tests
                         {
                             byte[] sendBuffer = new byte[] { 1, 2, 3 };
                             client.Send(new ArraySegment<byte>(sendBuffer));
-                        }                    
+                        }
                     });
                     Assert.Equal(EPIPE, exception.HResult);
                 }
@@ -369,6 +369,7 @@ namespace Tests
             using (var testServer = CreateTestServer(options =>
                                         { options.ConnectionDispatcher = connectionDispatcher;
                                           options.ThreadCount = 2;
+                                          options.ApplicationSchedulingMode = PipeScheduler.Inline;
                                           options.UnixSocketPath = $"{Path.GetTempPath()}/{Path.GetRandomFileName()}"; }))
             {
                 await testServer.BindAsync();

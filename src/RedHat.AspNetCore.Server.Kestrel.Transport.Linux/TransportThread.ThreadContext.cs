@@ -1,15 +1,16 @@
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Tmds.Linux;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Tmds.Linux;
 using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
@@ -36,10 +37,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private readonly TransportThread _transportThread;
             private readonly LinuxTransportOptions _transportOptions;
             private readonly ILogger _logger;
-            private readonly IConnectionDispatcher _connectionDispatcher;
             // key is the file descriptor
             private readonly Dictionary<int, TSocket> _sockets;
             private readonly List<TSocket> _acceptSockets;
+            private readonly Channel<TSocket> _acceptQueue;
+
 
             private PipeEndPair _pipeEnds;
             private int _epollState;
@@ -66,7 +68,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             public unsafe ThreadContext(TransportThread transportThread)
             {
                 _transportThread = transportThread;
-                _connectionDispatcher = transportThread.ConnectionDispatcher;
                 _sockets = new Dictionary<int, TSocket>();
                 _logger = _transportThread.LoggerFactory.CreateLogger($"{nameof(RedHat)}.{nameof(TransportThread)}.{_transportThread.ThreadId}");
                 _acceptSockets = new List<TSocket>();
@@ -111,6 +112,43 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     AioInterop.IoSetup(EventBufferLength, &ctx).ThrowOnError();
                     _aioContext = ctx;
                 }
+
+                // Single reader, single writer queue since all writes happen from the TransportThread and reads happen sequentially
+                // This channel is unbounded which means there's nothing limiting the number of sockets we're accepting.
+                // This is similar to having an unbounded number of thread pool work items queued to invoke a ConnectionHandler
+                // which was the previous pattern, but now it's more explicit.
+
+                // TODO: Find a reasonable limit and start applying accept backpressure once the channel reaches that limit.
+                _acceptQueue = Channel.CreateUnbounded<TSocket>(new UnboundedChannelOptions
+                {
+                    SingleReader = true,
+                    SingleWriter = true,
+                    AllowSynchronousContinuations = _transportOptions.ApplicationSchedulingMode == PipeScheduler.Inline,
+                });
+            }
+
+            public async ValueTask<TSocket> AcceptAsync(CancellationToken cancellationToken = default)
+            {
+                while (await _acceptQueue.Reader.WaitToReadAsync())
+                {
+                    while (_acceptQueue.Reader.TryRead(out var connection))
+                    {
+                        return connection;
+                    }
+                }
+
+                return null;
+            }
+
+            private async Task AbortQueuedConnectionAsync()
+            {
+                while (await _acceptQueue.Reader.WaitToReadAsync())
+                {
+                    while (_acceptQueue.Reader.TryRead(out var connection))
+                    {
+                        connection.Abort();
+                    }
+                }
             }
 
             private TSocket CreateAcceptSocket(IPEndPoint endPoint, SocketFlags flags)
@@ -123,7 +161,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     SocketInterop.Socket(ipv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_TCP, blocking: false,
                         out acceptSocketFd).ThrowOnError();
 
-                    TSocket acceptSocket = new TSocket(this, acceptSocketFd, flags);
+                    TSocket acceptSocket = new TSocket(this, acceptSocketFd, flags, _transportOptions);
 
                     if (!ipv4)
                     {
@@ -203,7 +241,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     {
                         flags |= SocketFlags.TypePassFd;
                         int acceptSocketFd = _transportThread.AcceptThread.CreateReceiveSocket();
-                        acceptSocket = new TSocket(this, acceptSocketFd, flags);
+                        acceptSocket = new TSocket(this, acceptSocketFd, flags, _transportOptions);
                         acceptSocket.ZeroCopyThreshold = LinuxTransportOptions.NoZeroCopy;
                     }
                     else
@@ -439,7 +477,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _logger.LogDebug($"Stats A/AE:{statAccepts}/{statAcceptEvents} RE:{statReadEvents} WE:{statWriteEvents} ZCS/ZCC:{statZeroCopySuccess}/{statZeroCopyCopied}");
 
                     CompleteStateChange(TransportThreadState.Stopped);
-
                 }
                 catch (Exception ex)
                 {
@@ -607,31 +644,32 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     try
                     {
                         SocketFlags flags = SocketFlags.TypeClient | (tacceptSocket.IsDeferSend ? SocketFlags.DeferSend : SocketFlags.None);
-                        tsocket = new TSocket(this, clientFd, flags)
+                        tsocket = new TSocket(this, clientFd, flags, _transportOptions)
                         {
                             ZeroCopyThreshold = tacceptSocket.ZeroCopyThreshold
                         };
 
-                        bool ipSocket = !object.ReferenceEquals(tacceptSocket.LocalAddress, NotIPSocket);
+                        var localIpEndPoint = tacceptSocket.LocalEndPoint as IPEndPoint;
+                        bool ipSocket = !object.ReferenceEquals(localIpEndPoint?.Address, NotIPSocket);
 
                         // Store the last LocalAddress on the tacceptSocket so we might reuse it instead
                         // of allocating a new one for the same address.
                         IPEndPointStruct localAddress = default(IPEndPointStruct);
                         IPEndPointStruct remoteAddress = default(IPEndPointStruct);
-                        if (ipSocket && tsocket.TryGetLocalIPAddress(out localAddress, tacceptSocket.LocalAddress))
+                        if (ipSocket && tsocket.TryGetLocalIPAddress(out localAddress, localIpEndPoint?.Address))
                         {
-                            tsocket.LocalAddress = localAddress.Address;
-                            tsocket.LocalPort = localAddress.Port;
+                            tsocket.LocalEndPoint = new IPEndPoint(localAddress.Address, localAddress.Port);
+
                             if (tsocket.TryGetPeerIPAddress(out remoteAddress))
                             {
-                                tsocket.RemoteAddress = remoteAddress.Address;
-                                tsocket.RemotePort = remoteAddress.Port;
+                                tsocket.RemoteEndPoint = new IPEndPoint(remoteAddress.Address, remoteAddress.Port);
                             }
                         }
                         else
                         {
                             // This is not an IP socket.
-                            tacceptSocket.LocalAddress = NotIPSocket;
+                            // REVIEW: Should LocalEndPoint be null instead? Some other EndPoint type?
+                            tacceptSocket.LocalEndPoint = new IPEndPoint(NotIPSocket, 0);
                             ipSocket = false;
                         }
 
@@ -646,7 +684,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         return 0;
                     }
 
-                    tsocket.MiddlewareTask = _connectionDispatcher.OnConnection(tsocket);
+                    bool accepted = _acceptQueue.Writer.TryWrite(tsocket);
+                    Debug.Assert(accepted, "The connection was not written to the channel!");
 
                     lock (_sockets)
                     {
@@ -779,6 +818,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             public unsafe void Dispose()
             {
+                AbortQueuedConnectionAsync().GetAwaiter().GetResult();
+
                 _epoll?.Dispose();
                 _pipeEnds.Dispose();
                 MemoryPool?.Dispose();
@@ -946,6 +987,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     acceptSockets[i].Close(); // will close (no concurrent users)
                 }
                 acceptSockets.Clear();
+                _acceptQueue.Writer.TryComplete();
                 CompleteStateChange(TransportThreadState.AcceptClosed);
                 if (lastSocket)
                 {
@@ -966,7 +1008,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
             internal static MemoryPool<byte> CreateMemoryPool()
             {
-                return KestrelMemoryPool.Create();
+                return new SlabMemoryPool();
             }
 
             private struct ScheduledSend

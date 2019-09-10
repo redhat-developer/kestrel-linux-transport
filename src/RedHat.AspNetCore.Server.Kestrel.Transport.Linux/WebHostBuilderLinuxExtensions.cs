@@ -1,6 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.DependencyInjection;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
 
@@ -16,7 +16,7 @@ namespace Microsoft.AspNetCore.Hosting
             }
             return hostBuilder.ConfigureServices(services =>
             {
-                services.AddSingleton<ITransportFactory, LinuxTransportFactory>();
+                services.AddSingleton<IConnectionListenerFactory, LinuxTransportFactory>();
             });
         }
 

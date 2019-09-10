@@ -1,4 +1,5 @@
 using System;
+using System.IO.Pipelines;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
@@ -25,6 +26,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             // Users that want to optimize, should do their own benchmarks.
             ThreadCount = Math.Min(Environment.ProcessorCount, 16);
         }
+
+        public PipeScheduler ApplicationSchedulingMode { get; set; } = PipeScheduler.ThreadPool;
 
         internal bool ReceiveOnIncomingCpu
         {

@@ -1,14 +1,8 @@
 using System;
-using System.Buffers;
-using System.Collections;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO.Pipelines;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
@@ -21,7 +15,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         private Thread _thread;
         private ThreadContext _threadContext;
 
-        public IConnectionDispatcher ConnectionDispatcher { get; }
         public int ThreadId { get; }
         public IPEndPoint EndPoint { get; }
         public LinuxTransportOptions TransportOptions { get; }
@@ -29,13 +22,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public ILoggerFactory LoggerFactory { get; }
         public int CpuId { get; }
 
-        public TransportThread(IPEndPoint endPoint, IConnectionDispatcher connectionDispatcher, LinuxTransportOptions options, AcceptThread acceptThread, int threadId, int cpuId, ILoggerFactory loggerFactory)
+        public TransportThread(IPEndPoint endPoint, LinuxTransportOptions options, AcceptThread acceptThread, int threadId, int cpuId, ILoggerFactory loggerFactory)
         {
-            if (connectionDispatcher == null)
-            {
-                throw new ArgumentNullException(nameof(connectionDispatcher));
-            }
-            ConnectionDispatcher = connectionDispatcher;
             ThreadId = threadId;
             CpuId = cpuId;
             EndPoint = endPoint;
@@ -222,6 +210,27 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     tcs?.SetResult(null);
                 }
             });
+        }
+
+        public async ValueTask<ConnectionContext> AcceptAsync(CancellationToken cancellationToken = default)
+        {
+            ValueTask<TSocket> acceptTask;
+
+            lock (_gate)
+            {
+                if (_state > TransportThreadState.ClosingAccept)
+                {
+                    return null;
+                }
+                else if (_state < TransportThreadState.Started)
+                {
+                    ThrowInvalidState();
+                }
+
+                acceptTask = _threadContext.AcceptAsync(cancellationToken);
+            }
+
+            return await acceptTask;
         }
     }
 }

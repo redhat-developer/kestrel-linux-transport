@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.IO.Pipelines;
 using System.Linq;
 using System.Net;
 using System.Runtime;
@@ -7,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -141,7 +141,7 @@ namespace SampleApp
             var hostBuilder = new WebHostBuilder()
                 .UseKestrel(options =>
                 {
-                    options.ApplicationSchedulingMode = tt ? SchedulingMode.Inline : SchedulingMode.ThreadPool;
+                    options.AllowSynchronousIO = true;
                 })
                 .UseStartup<Startup>();
 
@@ -158,6 +158,7 @@ namespace SampleApp
                 hostBuilder = hostBuilder.UseLinuxTransport(options =>
                 {
                     options.ThreadCount = threadCount;
+                    options.ApplicationSchedulingMode = tt ? PipeScheduler.Inline : PipeScheduler.ThreadPool;
                     //options.SetThreadAffinity = ta;
                     //options.ReceiveOnIncomingCpu = ic;
                     options.DeferAccept = da;

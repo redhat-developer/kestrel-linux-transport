@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
+using Microsoft.AspNetCore.Connections;
 using static Tmds.Linux.LibC;
 using Tmds.Linux;
 
@@ -108,6 +109,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 IOInterop.Close(handler);
             }
+        }
+
+        public ValueTask<ConnectionContext> AcceptAsync(CancellationToken cancellationToken = default)
+        {
+            return default;
         }
 
         private unsafe void AcceptThreadStart(object state)

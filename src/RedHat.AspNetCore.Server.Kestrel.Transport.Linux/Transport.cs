@@ -2,15 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Logging;
 using static Tmds.Linux.LibC;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
-    internal class Transport : ITransport
+    internal class Transport : IConnectionListener
     {
         private enum State
         {
@@ -25,21 +26,18 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         // Kestrel LibuvConstants.ListenBacklog
         private const int ListenBacklog = 128;
 
-        private readonly IEndPointInformation _endPoint;
-        private readonly IConnectionDispatcher _connectionDispatcher;
         private readonly LinuxTransportOptions _transportOptions;
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger _logger;
         private State _state;
         private readonly object _gate = new object();
         private ITransportActionHandler[] _threads;
+        private IAsyncEnumerator<ConnectionContext> _acceptEnumerator;
 
-        public Transport(IEndPointInformation ipEndPointInformation, IConnectionDispatcher connectionDispatcher, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
+        public EndPoint EndPoint { get; }
+
+        public Transport(EndPoint endPoint, LinuxTransportOptions transportOptions, ILoggerFactory loggerFactory)
         {
-            if (connectionDispatcher == null)
-            {
-                throw new ArgumentNullException(nameof(connectionDispatcher));
-            }
             if (transportOptions == null)
             {
                 throw new ArgumentException(nameof(transportOptions));
@@ -48,13 +46,12 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new ArgumentException(nameof(loggerFactory));
             }
-            if (ipEndPointInformation == null)
+            if (endPoint == null)
             {
-                throw new ArgumentException(nameof(ipEndPointInformation));
+                throw new ArgumentException(nameof(endPoint));
             }
 
-            _endPoint = ipEndPointInformation;
-            _connectionDispatcher = connectionDispatcher;
+            EndPoint = endPoint;
             _transportOptions = transportOptions;
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<Transport>();
@@ -65,6 +62,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
             AcceptThread acceptThread;
             TransportThread[] transportThreads;
+
             lock (_gate)
             {
                 if (_state != State.Created)
@@ -73,34 +71,28 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
                 _state = State.Binding;
 
-                IPEndPoint ipEndPoint;
-                switch (_endPoint.Type)
+                switch (EndPoint)
                 {
-                    case ListenType.IPEndPoint:
-                        ipEndPoint = _endPoint.IPEndPoint;
+                    case IPEndPoint ipEndPoint:
                         acceptThread = null;
-                        transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
+                        transportThreads = CreateTransportThreads(ipEndPoint, acceptThread: null);
                         break;
-                    case ListenType.SocketPath:
-                    case ListenType.FileHandle:
-                        Socket socket;
-                        if (_endPoint.Type == ListenType.SocketPath)
-                        {
-                            socket = Socket.Create(AF_UNIX, SOCK_STREAM, 0, blocking: false);
-                            File.Delete(_endPoint.SocketPath);
-                            socket.Bind(_endPoint.SocketPath);
-                            socket.Listen(ListenBacklog);
-                        }
-                        else
-                        {
-                            socket = new Socket((int)_endPoint.FileHandle);
-                        }
-                        ipEndPoint = null;
-                        acceptThread = new AcceptThread(socket);
-                        transportThreads = CreateTransportThreads(ipEndPoint, acceptThread);
+                    case UnixDomainSocketEndPoint unixDomainSocketEndPoint:
+                        var socketPath = unixDomainSocketEndPoint.ToString();
+                        var unixDomainSocket = Socket.Create(AF_UNIX, SOCK_STREAM, 0, blocking: false);
+                        File.Delete(socketPath);
+                        unixDomainSocket.Bind(socketPath);
+                        unixDomainSocket.Listen(ListenBacklog);
+                        acceptThread = new AcceptThread(unixDomainSocket);
+                        transportThreads = CreateTransportThreads(ipEndPoint: null, acceptThread);
+                        break;
+                    case FileHandleEndPoint fileHandleEndPoint:
+                        var fileHandleSocket = new Socket((int)fileHandleEndPoint.FileHandle);
+                        acceptThread = new AcceptThread(fileHandleSocket);
+                        transportThreads = CreateTransportThreads(ipEndPoint: null, acceptThread);
                         break;
                     default:
-                        throw new NotSupportedException($"Unknown ListenType: {_endPoint.Type}.");
+                        throw new NotSupportedException($"Unknown ListenType: {EndPoint.GetType()}.");
                 }
 
                 _threads = new ITransportActionHandler[transportThreads.Length + (acceptThread != null ? 1 : 0)];
@@ -110,7 +102,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _threads[i + (acceptThread == null ? 0 : 1)] = transportThreads[i];
                 }
 
-                _logger.LogDebug($@"BindAsync {_endPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
+                _logger.LogDebug($@"BindAsync {EndPoint}: TC:{_transportOptions.ThreadCount} TA:{_transportOptions.SetThreadAffinity} IC:{_transportOptions.ReceiveOnIncomingCpu} DA:{_transportOptions.DeferAccept}");
             }
 
             var tasks = new Task[transportThreads.Length];
@@ -127,6 +119,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     await acceptThread.BindAsync();
                 }
 
+                _acceptEnumerator = AcceptConnections();
+
                 lock (_gate)
                 {
                     if (_state == State.Binding)
@@ -141,9 +135,33 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
             catch
             {
-                await StopAsync();
+                await DisposeAsync();
                 throw;
             }
+        }
+
+        public async ValueTask<ConnectionContext> AcceptAsync(CancellationToken cancellationToken = default)
+        {
+            if (cancellationToken.CanBeCanceled)
+            {
+                throw new NotImplementedException("AcceptAsync does not currently support cancellation via a token.");
+            }
+
+            lock (_gate)
+            {
+                if (_state >= State.Stopping)
+                {
+                    throw new ObjectDisposedException(GetType().FullName);
+                }
+            }
+
+            if (await _acceptEnumerator.MoveNextAsync())
+            {
+                return _acceptEnumerator.Current;
+            }
+
+            // null means we're done...
+            return null;
         }
 
         private static int s_threadId = 0;
@@ -161,7 +179,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 int cpuId = preferredCpuIds == null ? -1 : preferredCpuIds[cpuIdx++ % preferredCpuIds.Count];
                 int threadId = Interlocked.Increment(ref s_threadId);
-                var thread = new TransportThread(ipEndPoint, _connectionDispatcher, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
+                var thread = new TransportThread(ipEndPoint, _transportOptions, acceptThread, threadId, cpuId, _loggerFactory);
                 threads[i] = thread;
             }
             return threads;
@@ -202,7 +220,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             return ids;
         }
 
-        public async Task UnbindAsync()
+        public async ValueTask UnbindAsync(CancellationToken cancellationToken = default)
         {
             lock (_gate)
             {
@@ -234,7 +252,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             }
         }
 
-        public async Task StopAsync()
+        public async ValueTask DisposeAsync()
         {
             lock (_gate)
             {
@@ -263,6 +281,46 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     ThrowInvalidOperation();
                 }
+            }
+        }
+
+        private async IAsyncEnumerator<ConnectionContext> AcceptConnections()
+        {
+            var slots = new Task<(ConnectionContext, int)>[_threads.Length];
+            // This is the task we'll put in the slot when each listening completes. It'll prevent
+            // us from having to shrink the array. We'll just loop while there are active slots.
+            var incompleteTask = new TaskCompletionSource<(ConnectionContext, int)>().Task;
+
+            var remainingSlots = slots.Length;
+
+            // Issue parallel accepts on all listeners
+            for (int i = 0; i < remainingSlots; i++)
+            {
+                slots[i] = AcceptAsync(_threads[i], i);
+            }
+
+            while (remainingSlots > 0)
+            {
+                // Calling GetAwaiter().GetResult() is safe because we know the task is completed
+                (var connection, var slot) = (await Task.WhenAny(slots)).GetAwaiter().GetResult();
+
+                // If the connection is null then the listener was closed
+                if (connection == null)
+                {
+                    remainingSlots--;
+                    slots[slot] = incompleteTask;
+                }
+                else
+                {
+                    // Fill that slot with another accept and yield the connection
+                    slots[slot] = AcceptAsync(_threads[slot], slot);
+                    yield return connection;
+                }
+            }
+
+            static async Task<(ConnectionContext, int)> AcceptAsync(ITransportActionHandler transportThread, int slot)
+            {
+                return (await transportThread.AcceptAsync(), slot);
             }
         }
 
