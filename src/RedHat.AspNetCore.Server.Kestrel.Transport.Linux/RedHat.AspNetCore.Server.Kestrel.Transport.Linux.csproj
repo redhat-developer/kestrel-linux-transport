@@ -8,6 +8,7 @@
     <DebugType>portable</DebugType>
     <LangVersion>8.0</LangVersion>
     <OutputType>Library</OutputType>
+    <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
