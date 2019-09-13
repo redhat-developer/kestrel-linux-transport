@@ -3,6 +3,7 @@ using System.Buffers;
 using System.IO;
 using System.IO.Pipelines;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -74,14 +75,16 @@ namespace Tests
             }
         }
 
-        [Fact]
-        public async Task StopDisconnectsClient()
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task StopDisconnectsClient(bool waitForAccept)
         {
-            var outputTcs = new TaskCompletionSource<PipeWriter>();
-            TestServerConnectionDispatcher connectionDispatcher = (input, output, _) =>
+            var clientAcceptedTcs = new TaskCompletionSource<object>();
+            TestServerConnectionDispatcher connectionDispatcher = (input, output, context) =>
             {
-                outputTcs.SetResult(output);
-                return Task.CompletedTask;
+                clientAcceptedTcs.SetResult(output);
+                return Task.Delay(int.MaxValue, context.ConnectionClosed);
             };
 
             using (var testServer = CreateTestServer(connectionDispatcher))
@@ -90,17 +93,39 @@ namespace Tests
 
                 using (var client = testServer.ConnectTo())
                 {
+                    // Make sure the client is accepted.
+                    if (waitForAccept)
+                    {
+                        await clientAcceptedTcs.Task;
+                    }
                     // Server shutdown:
                     await testServer.UnbindAsync();
-                    // Complete existing connections
-                    PipeWriter clientOutput = await outputTcs.Task;
-                    clientOutput.Complete(new ConnectionAbortedException());
                     await testServer.StopAsync();
 
-                    // receive returns EOF
                     byte[] receiveBuffer = new byte[10];
-                    var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
-                    Assert.Equal(0, received);
+                    Exception receiveException = null;
+                    int received = 1;
+                    try
+                    {
+                        received = client.Receive(new ArraySegment<byte>(receiveBuffer));
+                    }
+                    catch (Exception e)
+                    {
+                        receiveException = e;
+                    }
+                    // Socket was accepted by the server, which will do a normal TCP close.
+                    if (clientAcceptedTcs.Task.IsCompleted)
+                    {
+                        Assert.Equal(0, received);
+                        Assert.Null(receiveException);
+                    }
+                    // Socket was accepted by the kernel, not yet by the app. Kernel does an abortive close.
+                    else
+                    {
+                        Assert.NotNull(receiveException);
+                        SocketException se = Assert.IsAssignableFrom<SocketException>(receiveException);
+                        Assert.Equal(SocketError.ConnectionReset, se.SocketErrorCode);
+                    }
 
                     // send returns EPIPE
                     var exception = Assert.Throws<IOException>(() =>
