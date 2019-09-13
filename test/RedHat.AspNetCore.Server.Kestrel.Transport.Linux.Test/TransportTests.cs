@@ -374,6 +374,11 @@ namespace Tests
             {
                 await testServer.BindAsync();
 
+                // This test is racy, it's ok to ignore occasional failure.
+                // PipeScheduler.Inline isn't inline when there is no pending IConnectionListener.AcceptAsync.
+                // Wait a little to increase probability of AcceptAsync.
+                await Task.Delay(50);
+
                 int[] threadIds = new int[4];
                 for (int i = 0; i < 4; i++)
                 {
@@ -391,6 +396,9 @@ namespace Tests
                         received = client.Receive(new ArraySegment<byte>(receiveBuffer));
                         Assert.Equal(0, received);
                     }
+
+                    // See earlier comment, wait a little to increase probability of AcceptAsync.
+                    await Task.Delay(50);
                 }
 
                 // check we are doing round robin over 2 handling threads
