@@ -19,7 +19,7 @@ before_install:
 script:
 - pushd samples/KestrelSample && dotnet restore && dotnet build && popd
 - pushd test/RedHat.AspNetCore.Server.Kestrel.Transport.Linux.Test && dotnet restore && dotnet test && popd
-- dotnet pack src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$(date +"%y%m%d")-$TRAVIS_BUILD_NUMBER"
+- dotnet pack src/RedHat.AspNetCore.Server.Kestrel.Transport.Linux --configuration Release --version-suffix "$(date +"%y%m%d").$TRAVIS_BUILD_NUMBER"
   --output .
 after_success:
 - 'if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" == "false" ]; then
