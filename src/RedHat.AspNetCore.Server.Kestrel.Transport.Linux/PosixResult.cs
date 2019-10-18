@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using Microsoft.AspNetCore.Connections;
 using Tmds.Linux;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
@@ -15,6 +16,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
         public ssize_t Value => _value;
         public int IntValue => (int)_value;
+
+        private const string AddressNotAvailable = "EADDRNOTAVAIL";
+        private const string AddressInUse = "EADDRINUSE";
 
         public PosixResult(ssize_t value)
         {
@@ -40,20 +44,17 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 return string.Empty;
             }
-            else
+
+            lock (s_errnoDescriptions)
             {
-                lock (s_errnoDescriptions)
+                int errno = (int)-_value;
+                if (s_errnoDescriptions.TryGetValue(errno, out var description))
                 {
-                    int errno = (int)-_value;
-                    string description;
-                    if (s_errnoDescriptions.TryGetValue(errno, out description))
-                    {
-                        return description;
-                    }
-                    description = ErrorInterop.StrError(errno);
-                    s_errnoDescriptions.Add(errno, description);
                     return description;
                 }
+                description = ErrorInterop.StrError(errno);
+                s_errnoDescriptions.Add(errno, description);
+                return description;
             }
         }
 
@@ -65,7 +66,18 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new InvalidOperationException($"{nameof(PosixResult)} is not an error.");
             }
-            return new IOException(ErrorDescription(), (int)-_value);
+
+            var error = ErrorDescription();
+           
+            switch (error)
+            {
+                case AddressNotAvailable:
+                    throw new AddressNotAvailableException(error, (int)-_value);
+                case AddressInUse:
+                    throw new AddressInUseException(error);
+                default:
+                    return new IOException(error, (int)-_value);
+            }
         }
 
         public void ThrowOnError()
