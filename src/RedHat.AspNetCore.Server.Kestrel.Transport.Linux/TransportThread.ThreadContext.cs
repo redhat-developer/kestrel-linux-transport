@@ -9,6 +9,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Logging;
 using Tmds.Linux;
 using static Tmds.Linux.LibC;
@@ -196,7 +197,15 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                     }
 
-                    acceptSocket.Bind(endPoint);
+                    var bindResult = acceptSocket.TryBind(endPoint);
+
+                    if (bindResult == PosixResult.EADDRINUSE)
+                    {
+                        throw new AddressInUseException("EADDRINUSE");
+                    }
+                    
+                    bindResult.ThrowOnError();
+                    
                     if (port == 0)
                     {
                         // When testing we want the OS to select a free port

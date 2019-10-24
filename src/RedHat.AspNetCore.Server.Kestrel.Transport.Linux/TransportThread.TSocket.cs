@@ -892,6 +892,16 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                 PosixResult.FromReturnValue(rv).ThrowOnError();
             }
+            
+            public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
+            {
+                sockaddr_storage addr;
+                Socket.GetSockaddrInet(endpoint, &addr, out int length);
+
+                int rv = bind(Fd, (sockaddr*)&addr, length);
+
+                return PosixResult.FromReturnValue(rv);
+            }
 
             public void Listen(int backlog) => PosixResult.FromReturnValue(listen(Fd, backlog)).ThrowOnError();
 

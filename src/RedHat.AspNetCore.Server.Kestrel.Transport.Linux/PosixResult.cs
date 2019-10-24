@@ -17,9 +17,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public ssize_t Value => _value;
         public int IntValue => (int)_value;
 
-        private const string AddressNotAvailable = "EADDRNOTAVAIL";
-        private const string AddressInUse = "EADDRINUSE";
-
         public PosixResult(ssize_t value)
         {
             _value = value;
@@ -73,8 +70,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 case AddressNotAvailable:
                     throw new AddressNotAvailableException(error, (int)-_value);
-                case AddressInUse:
-                    throw new AddressInUseException(error);
                 default:
                     return new IOException(error, (int)-_value);
             }
