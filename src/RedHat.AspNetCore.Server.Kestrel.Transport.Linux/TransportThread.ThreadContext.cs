@@ -201,7 +201,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                     if (bindResult == PosixResult.EADDRINUSE)
                     {
-                        throw new AddressInUseException("EADDRINUSE");
+                        throw new AddressInUseException("Address in use.");
                     }
                     
                     bindResult.ThrowOnError();
