@@ -17,6 +17,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         public static int EPIPE => -Tmds.Linux.LibC.EPIPE;
         public static int ECONNREFUSED => -Tmds.Linux.LibC.ECONNREFUSED;
         public static int EADDRINUSE => -Tmds.Linux.LibC.EADDRINUSE;
-        public static int EADDRNOTAVAIL = -Tmds.Linux.LibC.EADDRINUSE;
+        public static int EADDRNOTAVAIL = -Tmds.Linux.LibC.EADDRNOTAVAIL;
     }
 }
