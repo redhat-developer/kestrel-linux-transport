@@ -41,17 +41,20 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 return string.Empty;
             }
-
-            lock (s_errnoDescriptions)
+            else
             {
-                int errno = (int)-_value;
-                if (s_errnoDescriptions.TryGetValue(errno, out var description))
+                lock (s_errnoDescriptions)
                 {
+                    int errno = (int)-_value;
+                    string description;
+                    if (s_errnoDescriptions.TryGetValue(errno, out description))
+                    {
+                        return description;
+                    }
+                    description = ErrorInterop.StrError(errno);
+                    s_errnoDescriptions.Add(errno, description);
                     return description;
                 }
-                description = ErrorInterop.StrError(errno);
-                s_errnoDescriptions.Add(errno, description);
-                return description;
             }
         }
 
