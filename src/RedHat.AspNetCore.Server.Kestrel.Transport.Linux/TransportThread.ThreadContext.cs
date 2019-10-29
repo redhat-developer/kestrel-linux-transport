@@ -204,6 +204,11 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         throw new AddressInUseException("Address in use.");
                     }
                     
+                    if (bindResult == PosixResult.EADDRNOTAVAIL)
+                    {
+                        throw new AddressNotAvailableException("Address not available.", PosixResult.EADDRNOTAVAIL);
+                    }
+                    
                     bindResult.ThrowOnError();
                     
                     if (port == 0)

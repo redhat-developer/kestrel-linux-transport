@@ -66,16 +66,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 throw new InvalidOperationException($"{nameof(PosixResult)} is not an error.");
             }
-
-            var error = ErrorDescription();
-           
-            switch (error)
-            {
-                case AddressNotAvailable:
-                    throw new AddressNotAvailableException(error, (int)-_value);
-                default:
-                    return new IOException(error, (int)-_value);
-            }
+            return new IOException(ErrorDescription(), (int)-_value);
         }
 
         public void ThrowOnError()
