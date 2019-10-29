@@ -882,11 +882,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 return SocketInterop.SetSockOpt(Fd, level, optname, (byte*)&value, 4);
             }
-
-            public void Bind(IPEndPointStruct endpoint)
-            {
-                TryBind(endpoint).ThrowOnError();
-            }
             
             public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
             {
