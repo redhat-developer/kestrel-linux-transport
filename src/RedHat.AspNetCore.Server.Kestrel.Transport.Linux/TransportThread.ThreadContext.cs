@@ -206,7 +206,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     
                     if (bindResult == PosixResult.EADDRNOTAVAIL)
                     {
-                        throw new AddressNotAvailableException("Address not available.", PosixResult.EADDRNOTAVAIL);
+                        throw new AddressNotAvailableException("Address not available.");
                     }
                     
                     bindResult.ThrowOnError();

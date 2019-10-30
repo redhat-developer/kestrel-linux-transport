@@ -5,7 +5,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 {
     public class AddressNotAvailableException : Exception
     {
-        public int HResult { get; }
         public AddressNotAvailableException()
         {
         }
@@ -20,12 +19,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
         {
         }
         
-        public AddressNotAvailableException(string message, int hResult) 
-            : base(message)
-        {
-            HResult = hResult;
-        }
-
         public AddressNotAvailableException(string message, Exception innerException) 
             : base(message, innerException)
         {
