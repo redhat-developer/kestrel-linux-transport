@@ -883,14 +883,14 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 return SocketInterop.SetSockOpt(Fd, level, optname, (byte*)&value, 4);
             }
 
-            public unsafe void Bind(IPEndPointStruct endpoint)
+            public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
             {
                 sockaddr_storage addr;
                 Socket.GetSockaddrInet(endpoint, &addr, out int length);
 
                 int rv = bind(Fd, (sockaddr*)&addr, length);
 
-                PosixResult.FromReturnValue(rv).ThrowOnError();
+                return PosixResult.FromReturnValue(rv);
             }
 
             public void Listen(int backlog) => PosixResult.FromReturnValue(listen(Fd, backlog)).ThrowOnError();

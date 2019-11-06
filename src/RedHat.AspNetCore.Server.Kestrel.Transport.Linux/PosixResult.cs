@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using Microsoft.AspNetCore.Connections;
 using Tmds.Linux;
 
 namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
