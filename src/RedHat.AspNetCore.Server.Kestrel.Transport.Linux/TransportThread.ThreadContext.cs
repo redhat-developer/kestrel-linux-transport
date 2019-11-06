@@ -168,6 +168,8 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         throw new AddressNotAvailableException("Address not available.");
                     }
 
+                    bindResult.ThrowOnError();
+
                     if (port == 0)
                     {
                         // When testing we want the OS to select a free port
