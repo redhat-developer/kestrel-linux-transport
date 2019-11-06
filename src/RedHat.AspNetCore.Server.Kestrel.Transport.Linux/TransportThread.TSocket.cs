@@ -882,7 +882,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             {
                 return SocketInterop.SetSockOpt(Fd, level, optname, (byte*)&value, 4);
             }
-            
+
             public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
             {
                 sockaddr_storage addr;
