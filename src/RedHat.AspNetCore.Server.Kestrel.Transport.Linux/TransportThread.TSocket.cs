@@ -96,7 +96,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 }
             }
 
-            public override long TotalBytesWritten => Interlocked.Read(ref _totalBytesWritten);
+            public long TotalBytesWritten => Interlocked.Read(ref _totalBytesWritten);
 
             public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
 
@@ -864,10 +864,10 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 return SocketInterop.SetSockOpt(Fd, optionLevel, optionName, (byte*)&value, 4);
             }
 
-            public unsafe void Bind(IPEndPointStruct endpoint)
+            public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
             {
                 IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
-                SocketInterop.Bind(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress)).ThrowOnError();
+                return SocketInterop.Bind(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress));
             }
 
             public void Listen(int backlog) => SocketInterop.Listen(Fd, backlog).ThrowOnError();
