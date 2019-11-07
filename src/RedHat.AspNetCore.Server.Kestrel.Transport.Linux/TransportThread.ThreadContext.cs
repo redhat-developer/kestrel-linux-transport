@@ -7,6 +7,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 
@@ -154,7 +155,20 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                         }
                     }
 
-                    acceptSocket.Bind(endPoint);
+                    var bindResult = acceptSocket.TryBind(endPoint);
+
+                    if (bindResult == PosixResult.EADDRINUSE)
+                    {
+                        throw new AddressInUseException("Address in use.");
+                    }
+
+                    if (bindResult == PosixResult.EADDRNOTAVAIL)
+                    {
+                        throw new AddressNotAvailableException("Address not available.");
+                    }
+
+                    bindResult.ThrowOnError();
+
                     if (port == 0)
                     {
                         // When testing we want the OS to select a free port
