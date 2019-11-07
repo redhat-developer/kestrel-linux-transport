@@ -157,7 +157,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
 
                     var bindResult = acceptSocket.TryBind(endPoint);
 
-
                     if (bindResult == PosixResult.EADDRINUSE)
                     {
                         throw new AddressInUseException("Address in use.");

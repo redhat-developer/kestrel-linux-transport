@@ -859,7 +859,7 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 return SocketInterop.SetSockOpt(Fd, optionLevel, optionName, (byte*)&value, 4);
             }
 
-            public unsafe PosixResult  TryBind(IPEndPointStruct endpoint)
+            public unsafe PosixResult TryBind(IPEndPointStruct endpoint)
             {
                 IPSocketAddress socketAddress = new IPSocketAddress(endpoint);
                 return SocketInterop.Bind(Fd, (byte*)&socketAddress, sizeof(IPSocketAddress));
