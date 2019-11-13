@@ -103,18 +103,10 @@ namespace Tests
                     await testServer.StopAsync();
 
                     byte[] receiveBuffer = new byte[10];
-                    try
-                    {
-                        var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
-                        // Socket was accepted by the server, which will do a normal TCP close.
-                        Assert.Equal(0, received);
-                    }
-                    catch (Exception e)
-                    {
-                        // Socket was accepted by the kernel, not yet by the app. Kernel does an abortive close.
-                        SocketException se = Assert.IsAssignableFrom<SocketException>(e);
-                        Assert.Equal(SocketError.ConnectionReset, se.SocketErrorCode);
-                    }
+                    
+                    var received = client.Receive(new ArraySegment<byte>(receiveBuffer));
+                    // Socket was accepted by the server, which will do a normal TCP close.
+                    Assert.Equal(0, received);
 
                     // send returns EPIPE
                     var exception = Assert.Throws<IOException>(() =>
