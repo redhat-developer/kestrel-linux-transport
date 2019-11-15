@@ -77,7 +77,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
             private ValueTaskAwaiter<FlushResult> _flushAwaiter;
             private int                   _zeropCopyState;
             private SequencePosition      _zeroCopyEnd;
-            private long                  _totalBytesWritten;
             private int                   _readState = CheckAvailable;
             public  Task                   MiddlewareTask;
 
@@ -95,8 +94,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                     _sendMemoryHandles = new MemoryHandle[MaxIOVectorSendLength];
                 }
             }
-
-            public long TotalBytesWritten => Interlocked.Read(ref _totalBytesWritten);
 
             public bool IsDeferAccept => HasFlag(SocketFlags.DeferAccept);
 
@@ -117,8 +114,9 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 set => _flags = (SocketFlags)value;
             }
 
-            public override void Abort()
+            public override void Abort(ConnectionAbortedException abortReason)
             {
+                Output.CancelPendingRead();
                 CancelWriteToSocket();
             }
 
@@ -307,10 +305,6 @@ namespace RedHat.AspNetCore.Server.Kestrel.Transport.Linux
                 {
                     _zeroCopyEnd = end;
                     return WaitZeroCopyComplete(loop, zeroCopyRegistered);
-                }
-                if (result.Value > 0)
-                {
-                    Interlocked.Add(ref _totalBytesWritten, result.Value);
                 }
                 // We need to call Advance to end the read
                 Output.AdvanceTo(end);
