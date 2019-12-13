@@ -12,7 +12,6 @@ using Microsoft.Extensions.Logging.Console;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal;
 using Benchmarks.Middleware;
 using RedHat.AspNetCore.Server.Kestrel.Transport.Linux;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using System.Linq;
 
 namespace SampleApp
