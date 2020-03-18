@@ -12,7 +12,7 @@ env:
     - secure: "LK5FHdPiguTxnhEpOHIabuO7CBYCwCH6liJad+6NooqbTYfhFfwArAVWRS6MsJ4JXMZEI6JTHH9z9be/U1c2TplHUBuWubNIHSioE2jp1fsdXFMMxk1BZSSe9uaT2hSrS+8QKnWHazVISBsbYakgsiKrhY7dlhkKdjBCqR+hQdNwnZVTs8hVUZxASye59aM8LMtonnYhqSjq3Wbt3hmBs+tqTQRpUH1m5uiWeXg1HE0Ccv+TMXPUdiLUEGquNx1FHaS2Kskl8ij5Ya50v/ujD8SgxbAFaf66nnk8InVDfA+XKsu5t4IayprY0yw0FvKJ9DzDNoNLbWFJv3Ak2J002CF+5L+GSZt/j1mPEfU7sBkxORplyi7NreFcSwcK8xSxsJkbDa6kNNAL3APHn1QzVaOh5JKOFWfkz5V/USWDiBCPzTA1Ly9O5JjCR9gla+t827Hj63lcDE3c05wD4NTchoyKi2Fdtf8XY4QcsAuonKCmFSBf2U0utG181g1JcVA1/lN+hM7tKrk0m/ZbTmZ8XkqH0+K/0k3ezhQNLZ13Q2lYmHXmU9+ONyFMAdKJ+BSCe/2bkFh5+c9sXrFp0GPzWvnP9FerMkbNqx68hdtUoflUaYfrG9XVI6mFH+H+YE17Jysc70U1FATRaKOLiu0KLrmsj2pxdghWg4fR0rbRjyU="
 
 before_install:
-- wget https://download.visualstudio.microsoft.com/download/pr/886b4a4c-30af-454b-8bec-81c72b7b4e1f/d1a0c8de9abb36d8535363ede4a15de6/dotnet-sdk-3.0.100-linux-x64.tar.gz -O dotnet-sdk-latest-linux-x64.tar.gz
+- wget https://download.visualstudio.microsoft.com/download/pr/d731f991-8e68-4c7c-8ea0-fad5605b077a/49497b5420eecbd905158d86d738af64/dotnet-sdk-3.1.100-linux-x64.tar.gz -O dotnet-sdk-latest-linux-x64.tar.gz
 - sudo mkdir /opt/dotnet
 - sudo tar xvf dotnet-sdk-latest-linux-x64.tar.gz -C /opt/dotnet
 - sudo ln -s /opt/dotnet/dotnet /usr/bin/dotnet
