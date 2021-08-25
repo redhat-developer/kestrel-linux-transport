@@ -1,4 +1,4 @@
-[![Travis](https://travis-ci.org/redhat-developer/kestrel-linux-transport.svg?branch=master)](https://travis-ci.org/redhat-developer/kestrel-linux-transport)
+**This code is no longer maintained, and won't be updated for new versions of .NET.**
 
 # Introduction
 
